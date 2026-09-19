@@ -12,6 +12,7 @@ import {
 import Oscilloscope from './Oscilloscope';
 import Waterfall from './Waterfall';
 import Spectrum from './Spectrum';
+import CollisionView from './CollisionView';
 
 // ─── Ring buffer ─────────────────────────────────────────────────────────────
 
@@ -286,120 +287,69 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-4 space-y-4">
 
         {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* COUNTER-PROPAGATING WAVES — HEAD-ON COLLISION                      */}
+        {/* COLLISION VIEW — MAIN VISUALIZATION                                */}
         {/* ════════════════════════════════════════════════════════════════════ */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-cyan-900/30 p-4">
-          <h2 className="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-1">
-            ↗↖ Head-On Collision — Complex Sum-of-Sines Waves
-          </h2>
+        <section className="bg-[#0a0a1a] rounded-xl border-2 border-cyan-900/50 p-4 shadow-2xl shadow-cyan-900/20">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-bold text-cyan-400 uppercase tracking-wider">
+              ⚡ Collision View — Waves Running Head-On
+            </h2>
+            <div className="flex items-center gap-3 text-[10px]">
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-0.5 bg-cyan-400 inline-block" /> V⁺ →
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-0.5 bg-purple-400 inline-block" /> ← V⁻
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-0.5 bg-yellow-400 inline-block" /> V⁺+V⁻
+              </span>
+            </div>
+          </div>
           <p className="text-[10px] text-gray-500 mb-3">
-            Left source launches V⁺ = ½A[sin(ω₁t) + sin(ω₂t)] → rightward &nbsp;|&nbsp;
-            Right source launches V⁻ = ½A[sin(ω₁t+π) + sin(ω₂t+π)] ← leftward &nbsp;|&nbsp;
-            They collide at center → interference peaks
+            Left source and right source both start at peak simultaneously → waves travel toward each other → collide at center → interference peaks (yellow dots)
           </p>
 
-          {/* Animated line */}
-          <div className="relative bg-gray-900/50 rounded-lg p-4 border border-gray-800/30 mb-4">
-            <div className="absolute inset-0 flex items-center pointer-events-none overflow-hidden rounded-lg">
-              <div className="absolute left-4 top-1/2 -translate-y-1/2 w-[40%] h-6 flex items-center">
-                <div className="flex-1 h-[2px] bg-gradient-to-r from-cyan-500/40 to-transparent" />
-                <div className="text-cyan-400 text-lg animate-pulse">▶</div>
-              </div>
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 w-[40%] h-6 flex items-center justify-end">
-                <div className="text-purple-400 text-lg animate-pulse">◀</div>
-                <div className="flex-1 h-[2px] bg-gradient-to-l from-purple-500/40 to-transparent" />
-              </div>
-            </div>
+          {/* THE MAIN GRAPH */}
+          <CollisionView
+            vRight={state.vRight}
+            vLeft={state.vLeft}
+            N={params.N}
+            time={state.time}
+          />
 
-            <div className="relative flex items-center justify-between px-6 py-6 min-h-[80px]">
+          {/* Animated pulse line below */}
+          <div className="relative bg-gray-900/50 rounded-lg p-3 border border-gray-800/30 mt-3">
+            <div className="relative flex items-center justify-between px-6 py-3 min-h-[40px]">
               <div className="absolute top-1/2 left-6 right-6 h-0.5 bg-gray-700/50 -translate-y-1/2" />
-
               {leftPulses.map((pos, k) => (
                 <div key={`lp-${k}`}
-                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-cyan-400 opacity-70 blur-[1px]"
+                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-cyan-400 opacity-80 blur-[1px]"
                   style={{ left: `${6 + pos * 88}%` }} />
               ))}
               {rightPulses.map((pos, k) => (
                 <div key={`rp-${k}`}
-                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-purple-400 opacity-70 blur-[1px]"
+                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-purple-400 opacity-80 blur-[1px]"
                   style={{ left: `${6 + pos * 88}%` }} />
               ))}
-
               {Array.from(state.voltages).map((_, i) => {
                 const isCenter = i === 9 || i === 10;
                 const energy = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
                 const color = energyToColor(energy, maxEnergy);
                 return (
-                  <div key={i} className="relative z-10 flex flex-col items-center">
-                    <div className={`w-3 h-3 rounded-full border ${
+                  <div key={i} className="relative z-10">
+                    <div className={`w-2.5 h-2.5 rounded-full border ${
                       isCenter ? 'border-yellow-400 ring-2 ring-yellow-400/40' : 'border-gray-600'
                     }`} style={{ backgroundColor: color }} />
                   </div>
                 );
               })}
             </div>
-
             <div className="flex justify-between items-center mt-1">
-              <div className="flex items-center gap-1">
-                <span className="text-cyan-400 font-bold text-xs">◀ V⁺ SOURCE</span>
-                <span className="text-cyan-500 text-lg animate-pulse">→→→</span>
-              </div>
-              <div className="text-yellow-400 text-[10px] font-bold">
-                ⚡ COLLISION ZONE (i=9,10)
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-purple-500 text-lg animate-pulse">←←←</span>
-                <span className="text-purple-400 font-bold text-xs">V⁻ SOURCE ▶</span>
-              </div>
+              <div className="text-cyan-400 text-[10px] font-bold">◀ SOURCE →→→</div>
+              <div className="text-yellow-400 text-[10px] font-bold">⚡ COLLISION</div>
+              <div className="text-purple-400 text-[10px] font-bold">←←← SOURCE ▶</div>
             </div>
-          </div>
-
-          {/* ══════════════════════════════════════════════════════════════════ */}
-          {/* THREE OSCILLOSCOPES: V⁺, V⁻, V⁺+V⁻                            */}
-          {/* ══════════════════════════════════════════════════════════════════ */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div>
-              <div className="text-[10px] text-cyan-400 mb-1 font-bold">
-                V⁺ RIGHTWARD WAVE (from LEFT source)
-              </div>
-              <Oscilloscope
-                buffer={scopeVPlusRef.current.data}
-                writeIdx={scopeVPlusRef.current.writeIdx}
-                length={scopeVPlusRef.current.count}
-                label="V⁺ = ½A[sin(ω₁t)+sin(ω₂t)] →"
-                color="rgb(0, 220, 255)"
-                height={120}
-              />
-            </div>
-            <div>
-              <div className="text-[10px] text-purple-400 mb-1 font-bold">
-                V⁻ LEFTWARD WAVE (from RIGHT source)
-              </div>
-              <Oscilloscope
-                buffer={scopeVMinusRef.current.data}
-                writeIdx={scopeVMinusRef.current.writeIdx}
-                length={scopeVMinusRef.current.count}
-                label="V⁻ = ½A[sin(ω₁t+π)+sin(ω₂t+π)] ←"
-                color="rgb(200, 100, 255)"
-                height={120}
-              />
-            </div>
-            <div>
-              <div className="text-[10px] text-yellow-400 mb-1 font-bold">
-                V⁺ + V⁻ = TOTAL (interference peaks!)
-              </div>
-              <Oscilloscope
-                buffer={scopeVTotalRef.current.data}
-                writeIdx={scopeVTotalRef.current.writeIdx}
-                length={scopeVTotalRef.current.count}
-                label="V_total = V⁺ + V⁻ (peaks!)"
-                color="rgb(255, 200, 0)"
-                height={120}
-              />
-            </div>
-          </div>
-          <div className="mt-2 text-[9px] text-gray-500 text-center">
-            V⁺ and V⁻ are complex sum-of-sines waves traveling in opposite directions. When they collide at center, they interfere → peaks visible in V_total.
           </div>
         </section>
 

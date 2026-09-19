@@ -56,9 +56,9 @@ export function boundaryVoltageLeft(t: number, p: SimulationParams): number {
 
 export function boundaryVoltageRight(t: number, p: SimulationParams): number {
   const omega2 = p.mode === 'irrational' ? p.R * p.omega1 : 2.0 * p.omega1;
-  return (p.amplitude / 2.0) * (
-    Math.sin(p.omega1 * t + Math.PI) + Math.sin(omega2 * t + Math.PI)
-  );
+  // In-phase with left source: both start at peak simultaneously
+  // so waves meet head-on and constructively interfere at center
+  return (p.amplitude / 2.0) * (Math.sin(p.omega1 * t) + Math.sin(omega2 * t));
 }
 
 // ─── ODE right-hand side ─────────────────────────────────────────────────────
