@@ -1,42 +1,44 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  WaveParams,
-  WaveState,
-  DEFAULT_WAVE_PARAMS,
-  createInitialWaveState,
-  advanceWaveSimulation,
-  getCenterPeakEnergy,
-  getEdgeEnergy,
-  checkDestruction,
+  SimulationParams,
+  SimulationState,
+  DEFAULT_PARAMS,
+  createInitialState,
+  advanceSimulation,
+  getCenterPeak,
   omegaToGHz,
-} from './waveSimulation';
+} from './simulation';
+import CollisionView from './CollisionView';
 
 function fmtSci(v: number): string { return Number.isFinite(v) ? v.toExponential(2) : '0.00e+0'; }
 function fmtFixed(v: number, d = 2): string { return Number.isFinite(v) ? v.toFixed(d) : '—'; }
 
-const SIM_DT = 0.001;
+const SIM_DT = 0.003;
+const SUB_STEPS = 5;
 
 export default function App() {
-  const [irrParams, setIrrParams] = useState<WaveParams>({
-    ...DEFAULT_WAVE_PARAMS,
+  // Irrational: R = 1.475482818459
+  const [irrParams, setIrrParams] = useState<SimulationParams>({
+    ...DEFAULT_PARAMS,
     mode: 'irrational',
     R: 1.475482818459,
   });
-  const [harmParams, setHarmParams] = useState<WaveParams>({
-    ...DEFAULT_WAVE_PARAMS,
+  
+  // Harmonic: R = 2.0
+  const [harmParams, setHarmParams] = useState<SimulationParams>({
+    ...DEFAULT_PARAMS,
     mode: 'harmonic',
     R: 2.0,
   });
 
   const [isRunning, setIsRunning] = useState(false);
-  const [irrState, setIrrState] = useState<WaveState>(() => createInitialWaveState(irrParams));
-  const [harmState, setHarmState] = useState<WaveState>(() => createInitialWaveState(harmParams));
+  const [irrState, setIrrState] = useState<SimulationState>(() => createInitialState(irrParams));
+  const [harmState, setHarmState] = useState<SimulationState>(() => createInitialState(harmParams));
+  
   const [irrPeakHistory, setIrrPeakHistory] = useState<{ t: number; peak: number }[]>([]);
   const [harmPeakHistory, setHarmPeakHistory] = useState<{ t: number; peak: number }[]>([]);
   const [irrMaxPeak, setIrrMaxPeak] = useState(0);
   const [harmMaxPeak, setHarmMaxPeak] = useState(0);
-  const [irrDestruction, setIrrDestruction] = useState(false);
-  const [harmDestruction, setHarmDestruction] = useState(false);
 
   const irrStateRef = useRef(irrState);
   const harmStateRef = useRef(harmState);
@@ -68,8 +70,8 @@ export default function App() {
     const maxStepsPerFrame = 50;
 
     while (accumulatorRef.current >= SIM_DT && stepsThisFrame < maxStepsPerFrame) {
-      irrCurrent = advanceWaveSimulation(irrCurrent, SIM_DT, irrParamsRef.current);
-      harmCurrent = advanceWaveSimulation(harmCurrent, SIM_DT, harmParamsRef.current);
+      irrCurrent = advanceSimulation(irrCurrent, SIM_DT, irrParamsRef.current, SUB_STEPS);
+      harmCurrent = advanceSimulation(harmCurrent, SIM_DT, harmParamsRef.current, SUB_STEPS);
       accumulatorRef.current -= SIM_DT;
       stepsThisFrame++;
     }
@@ -82,8 +84,8 @@ export default function App() {
 
       frameTickRef.current++;
       if (frameTickRef.current % 5 === 0) {
-        const irrPeak = getCenterPeakEnergy(irrCurrent);
-        const harmPeak = getCenterPeakEnergy(harmCurrent);
+        const irrPeak = getCenterPeak(irrCurrent);
+        const harmPeak = getCenterPeak(harmCurrent);
 
         setIrrPeakHistory(hist => {
           const next = [...hist, { t: irrCurrent.time, peak: irrPeak }];
@@ -98,13 +100,6 @@ export default function App() {
 
         setIrrMaxPeak(prev => Math.max(prev, irrPeak));
         setHarmMaxPeak(prev => Math.max(prev, harmPeak));
-
-        if (checkDestruction(irrCurrent, irrParamsRef.current.criticalEnergy)) {
-          setIrrDestruction(true);
-        }
-        if (checkDestruction(harmCurrent, harmParamsRef.current.criticalEnergy)) {
-          setHarmDestruction(true);
-        }
       }
     }
 
@@ -124,47 +119,22 @@ export default function App() {
 
   const handleReset = () => {
     setIsRunning(false);
-    const irrNew = createInitialWaveState(irrParams);
-    const harmNew = createInitialWaveState(harmParams);
+    const irrNew = createInitialState(irrParams);
+    const harmNew = createInitialState(harmParams);
     setIrrState(irrNew);
     setHarmState(harmNew);
     setIrrPeakHistory([]);
     setHarmPeakHistory([]);
     setIrrMaxPeak(0);
     setHarmMaxPeak(0);
-    setIrrDestruction(false);
-    setHarmDestruction(false);
     frameTickRef.current = 0;
     irrStateRef.current = irrNew;
     harmStateRef.current = harmNew;
     accumulatorRef.current = 0;
   };
 
-  const renderWaveProfile = (state: WaveState, color: string) => {
-    const N = state.psiTotal.length;
-    const maxAmp = Math.max(...Array.from(state.psiTotal).map(Math.abs), 0.01);
-    
-    return (
-      <div className="flex items-end gap-px h-20 bg-gray-900/50 rounded p-1 border border-gray-800/30">
-        {Array.from(state.psiTotal).map((psi, i) => {
-          const amp = Math.abs(Number.isFinite(psi) ? psi : 0);
-          const h = (amp / maxAmp) * 100;
-          const isCenter = i < 5;
-          return (
-            <div
-              key={i}
-              className="flex-1 rounded-t-sm transition-all duration-100"
-              style={{
-                height: `${Math.max(h, 2)}%`,
-                backgroundColor: isCenter ? '#fbbf24' : color,
-                boxShadow: isCenter && h > 50 ? `0 0 6px ${color}` : 'none',
-              }}
-            />
-          );
-        })}
-      </div>
-    );
-  };
+  const irrOmega2 = irrParams.R * irrParams.omega1;
+  const harmOmega2 = harmParams.R * harmParams.omega1;
 
   return (
     <div className="min-h-screen bg-[#050510] text-white font-mono overflow-hidden">
@@ -172,10 +142,10 @@ export default function App() {
         <div className="max-w-[1920px] mx-auto flex items-center justify-between flex-wrap gap-2">
           <div>
             <h1 className="text-base font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
-              ⚡ Continuous Wave Simulation — Spherical Convergence
+              ⚡ Two Speakers Facing Each Other — Irrational vs Harmonic
             </h1>
             <p className="text-[9px] text-gray-500 mt-0.5">
-              EM waves in vacuum/ether • Spherical geometry • Irrational vs Harmonic frequency ratio
+              Left speaker emits f₁+f₂ → ← f₁+f₂ Right speaker | Waves collide at center
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -193,113 +163,68 @@ export default function App() {
       </header>
 
       <main className="max-w-[1920px] mx-auto px-4 py-3 space-y-3">
+        {/* Controls */}
         <div className="grid grid-cols-2 gap-3">
-          {/* Irrational */}
+          <div className="bg-[#0a0a1a] rounded-lg border border-cyan-900/30 p-3">
+            <div className="text-[10px] text-cyan-400 font-bold mb-2">IRRATIONAL — Base Frequency f₁</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="10" max="100" step="1"
+                value={irrParams.omega1}
+                onChange={(e) => setIrrParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-cyan-300 font-mono w-20">{fmtFixed(omegaToGHz(irrParams.omega1), 2)} GHz</span>
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1">
+              f₁ = {fmtFixed(omegaToGHz(irrParams.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(irrOmega2), 2)} GHz | R = {irrParams.R.toFixed(4)}
+            </div>
+          </div>
+          <div className="bg-[#0a0a1a] rounded-lg border border-purple-900/30 p-3">
+            <div className="text-[10px] text-purple-400 font-bold mb-2">HARMONIC — Base Frequency f₁</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="10" max="100" step="1"
+                value={harmParams.omega1}
+                onChange={(e) => setHarmParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-purple-300 font-mono w-20">{fmtFixed(omegaToGHz(harmParams.omega1), 2)} GHz</span>
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1">
+              f₁ = {fmtFixed(omegaToGHz(harmParams.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(harmOmega2), 2)} GHz | R = 2.0
+            </div>
+          </div>
+        </div>
+
+        {/* Collision Views */}
+        <div className="grid grid-cols-2 gap-3">
           <section className="bg-[#0a0a1a] rounded-lg border-2 border-cyan-900/50 p-3">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-bold text-cyan-400">
-                ⚡ IRRATIONAL — R = {irrParams.R.toFixed(4)}
-              </h2>
-              {irrDestruction && (
-                <div className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-900/50 text-red-300 border border-red-700 animate-pulse">
-                  💥 DESTRUCTION
-                </div>
-              )}
+              <h2 className="text-xs font-bold text-cyan-400">⚡ IRRATIONAL — R = {irrParams.R.toFixed(4)}</h2>
+              <div className="text-[10px] text-gray-500">Peak: {fmtSci(irrMaxPeak)}</div>
             </div>
-
-            <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30 mb-2">
-              <div className="text-[9px] text-cyan-400 font-bold mb-1">BASE FREQUENCY f₁</div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="10"
-                  max="100"
-                  step="1"
-                  value={irrParams.omega1}
-                  onChange={(e) => setIrrParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
-                  className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                />
-                <span className="text-[10px] text-cyan-300 font-mono w-20">
-                  {fmtFixed(omegaToGHz(irrParams.omega1), 2)} GHz
-                </span>
-              </div>
+            <div className="text-[9px] text-gray-500 mb-1">
+              Left speaker: f₁+f₂ → ← f₁+f₂ Right speaker
             </div>
-
-            <div className="text-[9px] text-gray-500 mb-2">
-              f₁ = {fmtFixed(omegaToGHz(irrParams.omega1), 2)} GHz | 
-              f₂ = {fmtFixed(omegaToGHz(irrParams.R * irrParams.omega1), 2)} GHz
-            </div>
-
-            <div className="text-[9px] text-cyan-400 font-bold mb-1">WAVE PROFILE (center → edge)</div>
-            {renderWaveProfile(irrState, 'rgb(0, 220, 255)')}
-
-            <div className="grid grid-cols-2 gap-2 mt-2 text-[9px]">
-              <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
-                <span className="text-gray-500">Center Peak:</span>
-                <span className="text-cyan-400 font-bold ml-1">{fmtSci(getCenterPeakEnergy(irrState))}</span>
-              </div>
-              <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
-                <span className="text-gray-500">Max Peak:</span>
-                <span className="text-cyan-400 font-bold ml-1">{fmtSci(irrMaxPeak)}</span>
-              </div>
-            </div>
+            <CollisionView vRight={irrState.vRight} vLeft={irrState.vLeft} N={irrParams.N} time={irrState.time} />
           </section>
 
-          {/* Harmonic */}
           <section className="bg-[#0a0a1a] rounded-lg border-2 border-purple-900/50 p-3">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs font-bold text-purple-400">
-                ∿ HARMONIC — R = 2.0
-              </h2>
-              {harmDestruction && (
-                <div className="px-2 py-0.5 rounded text-[10px] font-bold bg-red-900/50 text-red-300 border border-red-700 animate-pulse">
-                  💥 DESTRUCTION
-                </div>
-              )}
+              <h2 className="text-xs font-bold text-purple-400">∿ HARMONIC — R = 2.0</h2>
+              <div className="text-[10px] text-gray-500">Peak: {fmtSci(harmMaxPeak)}</div>
             </div>
-
-            <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30 mb-2">
-              <div className="text-[9px] text-purple-400 font-bold mb-1">BASE FREQUENCY f₁</div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min="10"
-                  max="100"
-                  step="1"
-                  value={harmParams.omega1}
-                  onChange={(e) => setHarmParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
-                  className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                />
-                <span className="text-[10px] text-purple-300 font-mono w-20">
-                  {fmtFixed(omegaToGHz(harmParams.omega1), 2)} GHz
-                </span>
-              </div>
+            <div className="text-[9px] text-gray-500 mb-1">
+              Left speaker: f₁+f₂ → ← f₁+f₂ Right speaker
             </div>
-
-            <div className="text-[9px] text-gray-500 mb-2">
-              f₁ = {fmtFixed(omegaToGHz(harmParams.omega1), 2)} GHz | 
-              f₂ = {fmtFixed(omegaToGHz(harmParams.R * harmParams.omega1), 2)} GHz
-            </div>
-
-            <div className="text-[9px] text-purple-400 font-bold mb-1">WAVE PROFILE (center → edge)</div>
-            {renderWaveProfile(harmState, 'rgb(200, 100, 255)')}
-
-            <div className="grid grid-cols-2 gap-2 mt-2 text-[9px]">
-              <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30">
-                <span className="text-gray-500">Center Peak:</span>
-                <span className="text-purple-400 font-bold ml-1">{fmtSci(getCenterPeakEnergy(harmState))}</span>
-              </div>
-              <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30">
-                <span className="text-gray-500">Max Peak:</span>
-                <span className="text-purple-400 font-bold ml-1">{fmtSci(harmMaxPeak)}</span>
-              </div>
-            </div>
+            <CollisionView vRight={harmState.vRight} vLeft={harmState.vLeft} N={harmParams.N} time={harmState.time} />
           </section>
         </div>
 
         {/* Peak Comparison */}
         <section className="bg-[#0a0a1a] rounded-lg border-2 border-yellow-900/50 p-3">
-          <h2 className="text-sm font-bold text-yellow-400 mb-2">📊 Peak Comparison</h2>
+          <h2 className="text-sm font-bold text-yellow-400 mb-2">📊 Center Peak Comparison</h2>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="text-[9px] text-cyan-400 font-bold mb-1">IRRATIONAL Peak History</div>

@@ -1,6 +1,5 @@
-// Discrete LC-chain electromagnetic simulation engine
-// Implements the discrete telegraph equation with irrational spectral pumping
-// Tracks both node voltages AND inter-node currents for traveling-wave decomposition.
+// LC-Chain simulation with traveling wave decomposition
+// Two sources at opposite ends emit waves that travel toward each other
 
 export interface SimulationParams {
   N: number;
@@ -11,64 +10,33 @@ export interface SimulationParams {
   R: number;
   amplitude: number;
   mode: 'irrational' | 'harmonic';
-  reflectiveBoundaries?: boolean;
-  leftFreq1Enabled?: boolean;
-  leftFreq2Enabled?: boolean;
-  rightFreq1Enabled?: boolean;
-  rightFreq2Enabled?: boolean;
-  // Multi-dimensional collapse parameters
-  geometry?: 'linear' | 'cylindrical' | 'spherical';  // Wave convergence geometry
-  nonlinearViscosity?: boolean;  // G drops sharply at peak voltages
-  criticalEnergy?: number;  // Threshold for "matter destruction"
 }
 
 export interface SimulationState {
-  voltages: Float64Array;   // V_i for each node (length N)
-  currents: Float64Array;   // I_i = current from node i to node i+1 (length N-1)
+  voltages: Float64Array;
+  currents: Float64Array;
   time: number;
-  energies: Float64Array;   // E_i = V_i^2
-  // Traveling wave decomposition (computed on the fly)
-  vRight: Float64Array;     // V⁺ rightward wave at each node
-  vLeft: Float64Array;      // V⁻ leftward wave at each node
+  energies: Float64Array;
+  vRight: Float64Array;
+  vLeft: Float64Array;
 }
 
 export const DEFAULT_PARAMS: SimulationParams = {
   N: 80,
   L: 0.01,
   C: 0.01,
-  G: 0.0001,  // Минимальная диссипация — чтобы энергия накапливалась
+  G: 0.0001,
   omega1: 30.0,
   R: 1.475482818459,
   amplitude: 1.0,
   mode: 'irrational',
-  reflectiveBoundaries: true,  // Отражающие границы для накопления энергии
-  // All frequencies enabled by default
-  leftFreq1Enabled: true,
-  leftFreq2Enabled: true,
-  rightFreq1Enabled: true,
-  rightFreq2Enabled: true,
-  // Multi-dimensional collapse parameters
-  geometry: 'spherical',
-  nonlinearViscosity: true,
-  criticalEnergy: 100.0,
 };
 
-// Frequency display scale: ω_sim = 30 rad/s corresponds to f = 1 GHz
-// So: f_GHz = ω_sim / (2π × 30) × 1 = ω_sim / 30 (in our units)
-// More precisely: we define 1 "simulation frequency unit" = 1/30 GHz
-export const FREQ_SCALE_GHZ_PER_UNIT = 1.0 / 30.0; // ω=30 → 1 GHz
+// Frequency scale: ω=30 → 1 GHz
+export const FREQ_SCALE_GHZ_PER_UNIT = 1.0 / 30.0;
 export function omegaToGHz(omega: number): number {
   return omega * FREQ_SCALE_GHZ_PER_UNIT;
 }
-export function GHzToOmega(fGHz: number): number {
-  return fGHz / FREQ_SCALE_GHZ_PER_UNIT;
-}
-// With N=80, c=1/√(LC)=100:
-//   λ₁ = 2π·c/ω₁ ≈ 21 nodes → ~4 wavelengths fit in the line → visible nodes/antinodes
-//   λ₂ = 2π·c/ω₂ ≈ 14 nodes → ~6 wavelengths fit in the line
-// Two standing wave patterns with different numbers of antinodes interfere!
-
-// ─── NaN-safe helpers ────────────────────────────────────────────────────────
 
 function sanitizeArray(arr: Float64Array): Float64Array {
   for (let i = 0; i < arr.length; i++) {
@@ -77,38 +45,19 @@ function sanitizeArray(arr: Float64Array): Float64Array {
   return arr;
 }
 
-function safeNum(v: number, fallback = 0): number {
-  return Number.isFinite(v) ? v : fallback;
-}
-
-// ─── Boundary voltage sources ────────────────────────────────────────────────
-
-export function boundaryVoltageLeft(t: number, p: SimulationParams): number {
+// Left source: V₀(t) = (A/2)·[sin(ω₁t) + sin(ω₂t)]
+function boundaryVoltageLeft(t: number, p: SimulationParams): number {
   const omega2 = p.mode === 'irrational' ? p.R * p.omega1 : 2.0 * p.omega1;
-  const f1 = p.leftFreq1Enabled !== false ? Math.sin(p.omega1 * t) : 0;
-  const f2 = p.leftFreq2Enabled !== false ? Math.sin(omega2 * t) : 0;
-  return (p.amplitude / 2.0) * (f1 + f2);
+  return (p.amplitude / 2.0) * (Math.sin(p.omega1 * t) + Math.sin(omega2 * t));
 }
 
-export function boundaryVoltageRight(t: number, p: SimulationParams): number {
+// Right source: V_{N-1}(t) = (A/2)·[sin(ω₁t) + sin(ω₂t)] — in phase with left
+function boundaryVoltageRight(t: number, p: SimulationParams): number {
   const omega2 = p.mode === 'irrational' ? p.R * p.omega1 : 2.0 * p.omega1;
-  // In-phase with left source: both start at peak simultaneously
-  // so waves meet head-on and constructively interfere at center
-  const f1 = p.rightFreq1Enabled !== false ? Math.sin(p.omega1 * t) : 0;
-  const f2 = p.rightFreq2Enabled !== false ? Math.sin(omega2 * t) : 0;
-  return (p.amplitude / 2.0) * (f1 + f2);
+  return (p.amplitude / 2.0) * (Math.sin(p.omega1 * t) + Math.sin(omega2 * t));
 }
 
-// ─── ODE right-hand side ─────────────────────────────────────────────────────
-// State vector: [V_1, V_2, ..., V_{N-2}, I_0, I_1, ..., I_{N-2}]
-// where I_i is current through inductor from node i to node i+1.
-//
-// Equations:
-//   C dV_i/dt = I_{i-1} - I_i - G V_i    (KCL at node i)
-//   L dI_i/dt = V_i - V_{i+1}             (KVL across inductor i→i+1)
-//
-// Boundary: V_0 and V_{N-1} are driven sources.
-
+// ODE: C·dV/dt = I_left - I_right - G·V, L·dI/dt = V_left - V_right
 function computeDerivatives(
   V: Float64Array,
   I: Float64Array,
@@ -116,59 +65,16 @@ function computeDerivatives(
   p: SimulationParams,
 ): { dV: Float64Array; dI: Float64Array } {
   const { N, L, C, G } = p;
-  const geometry = p.geometry || 'linear';
-  const nonlinearViscosity = p.nonlinearViscosity || false;
   const dV = new Float64Array(N);
   const dI = new Float64Array(N - 1);
 
   const invC = 1.0 / C;
   const invL = 1.0 / L;
 
-  // Geometry factor: wave convergence amplification
-  // For spherical: energy density grows as 1/r² near center
-  // For cylindrical: energy density grows as 1/r near center
-  const getGeometryFactor = (i: number): number => {
-    const centerIdx = Math.floor(N / 2);
-    const distFromCenter = Math.abs(i - centerIdx);
-    const minDist = 1.0; // Prevent division by zero
-    
-    if (geometry === 'spherical') {
-      // Spherical convergence: 1/r² amplification
-      const r = Math.max(distFromCenter, minDist);
-      return (N / 2) / (r * r); // Amplification factor
-    } else if (geometry === 'cylindrical') {
-      // Cylindrical convergence: 1/r amplification
-      const r = Math.max(distFromCenter, minDist);
-      return Math.sqrt((N / 2) / r); // Amplification factor
-    }
-    return 1.0; // Linear: no amplification
-  };
-
-  // Nonlinear viscosity: G drops sharply at high voltages
-  const getNonlinearG = (v: number): number => {
-    if (!nonlinearViscosity) return G;
-    // G(V) = G_base / (1 + alpha * V²)
-    // When V is large, G drops → less dissipation → energy accumulates
-    const alpha = 10.0; // Nonlinearity strength
-    return G / (1.0 + alpha * v * v);
-  };
-
-  // KCL at internal nodes
   for (let i = 1; i < N - 1; i++) {
-    const iLeft = I[i - 1];   // current flowing INTO node i from left
-    const iRight = I[i];      // current flowing OUT of node i to right
-    
-    // Apply geometry amplification to incoming currents
-    const geoFactor = getGeometryFactor(i);
-    const effectiveCurrent = (iLeft - iRight) * geoFactor;
-    
-    // Apply nonlinear viscosity
-    const effectiveG = getNonlinearG(V[i]);
-    
-    dV[i] = (effectiveCurrent - effectiveG * V[i]) * invC;
+    dV[i] = (I[i - 1] - I[i] - G * V[i]) * invC;
   }
 
-  // KVL across each inductor
   for (let i = 0; i < N - 1; i++) {
     dI[i] = (V[i] - V[i + 1]) * invL;
   }
@@ -176,9 +82,8 @@ function computeDerivatives(
   return { dV, dI };
 }
 
-// ─── RK4 integrator ─────────────────────────────────────────────────────────
-
-export function rk4Step(
+// RK4 integrator
+function rk4Step(
   V: Float64Array,
   I: Float64Array,
   t: number,
@@ -190,45 +95,30 @@ export function rk4Step(
 
   const k1 = computeDerivatives(V, I, t, p);
 
-  // Helper for boundary conditions
-  const applyBoundary = (v: Float64Array, tLocal: number) => {
-    if (p.reflectiveBoundaries) {
-      const reflectionCoeff = 0.85;
-      const sourceLeft = boundaryVoltageLeft(tLocal, p);
-      const sourceRight = boundaryVoltageRight(tLocal, p);
-      v[0] = (sourceLeft + reflectionCoeff * v[1]) / (1 + reflectionCoeff);
-      v[N - 1] = (sourceRight + reflectionCoeff * v[N - 2]) / (1 + reflectionCoeff);
-    } else {
-      v[0] = boundaryVoltageLeft(tLocal, p);
-      v[N - 1] = boundaryVoltageRight(tLocal, p);
-    }
-  };
-
-  // k2
   const v2 = new Float64Array(N);
   const i2 = new Float64Array(nI);
   for (let j = 0; j < N; j++) v2[j] = V[j] + 0.5 * dt * k1.dV[j];
   for (let j = 0; j < nI; j++) i2[j] = I[j] + 0.5 * dt * k1.dI[j];
-  applyBoundary(v2, t + 0.5 * dt);
+  v2[0] = boundaryVoltageLeft(t + 0.5 * dt, p);
+  v2[N - 1] = boundaryVoltageRight(t + 0.5 * dt, p);
   const k2 = computeDerivatives(v2, i2, t + 0.5 * dt, p);
 
-  // k3
   const v3 = new Float64Array(N);
   const i3 = new Float64Array(nI);
   for (let j = 0; j < N; j++) v3[j] = V[j] + 0.5 * dt * k2.dV[j];
   for (let j = 0; j < nI; j++) i3[j] = I[j] + 0.5 * dt * k2.dI[j];
-  applyBoundary(v3, t + 0.5 * dt);
+  v3[0] = boundaryVoltageLeft(t + 0.5 * dt, p);
+  v3[N - 1] = boundaryVoltageRight(t + 0.5 * dt, p);
   const k3 = computeDerivatives(v3, i3, t + 0.5 * dt, p);
 
-  // k4
   const v4 = new Float64Array(N);
   const i4 = new Float64Array(nI);
   for (let j = 0; j < N; j++) v4[j] = V[j] + dt * k3.dV[j];
   for (let j = 0; j < nI; j++) i4[j] = I[j] + dt * k3.dI[j];
-  applyBoundary(v4, t + dt);
+  v4[0] = boundaryVoltageLeft(t + dt, p);
+  v4[N - 1] = boundaryVoltageRight(t + dt, p);
   const k4 = computeDerivatives(v4, i4, t + dt, p);
 
-  // Combine
   const newV = new Float64Array(N);
   const newI = new Float64Array(nI);
   const dt6 = dt / 6.0;
@@ -240,49 +130,26 @@ export function rk4Step(
     newI[j] = I[j] + dt6 * (k1.dI[j] + 2 * k2.dI[j] + 2 * k3.dI[j] + k4.dI[j]);
   }
 
-  // Boundary conditions
-  if (p.reflectiveBoundaries) {
-    // Reflective boundaries: source + reflected wave
-    // Waves bounce back and interfere, accumulating energy at center
-    const reflectionCoeff = 0.85;  // 85% reflection
-    const sourceLeft = boundaryVoltageLeft(t + dt, p);
-    const sourceRight = boundaryVoltageRight(t + dt, p);
-    
-    // V[0] = source + reflection * (V[1] - V[0])
-    // Rearranging: V[0] * (1 + reflectionCoeff) = source + reflectionCoeff * V[1]
-    newV[0] = (sourceLeft + reflectionCoeff * newV[1]) / (1 + reflectionCoeff);
-    newV[N - 1] = (sourceRight + reflectionCoeff * newV[N - 2]) / (1 + reflectionCoeff);
-  } else {
-    // Absorbing boundaries: waves are absorbed by sources (no reflection)
-    newV[0] = boundaryVoltageLeft(t + dt, p);
-    newV[N - 1] = boundaryVoltageRight(t + dt, p);
-  }
+  newV[0] = boundaryVoltageLeft(t + dt, p);
+  newV[N - 1] = boundaryVoltageRight(t + dt, p);
 
-  // NaN / Infinity guard
   sanitizeArray(newV);
   sanitizeArray(newI);
 
-  // Blow-up guard
   const VMAX = 1e6;
-  const IMAX = 1e6;
   for (let j = 0; j < N; j++) {
     if (newV[j] > VMAX) newV[j] = VMAX;
     else if (newV[j] < -VMAX) newV[j] = -VMAX;
   }
   for (let j = 0; j < nI; j++) {
-    if (newI[j] > IMAX) newI[j] = IMAX;
-    else if (newI[j] < -IMAX) newI[j] = -IMAX;
+    if (newI[j] > VMAX) newI[j] = VMAX;
+    else if (newI[j] < -VMAX) newI[j] = -VMAX;
   }
 
   return { V: newV, I: newI };
 }
 
-// ─── Traveling wave decomposition ────────────────────────────────────────────
-// V⁺_i = (V_i + Z * I_i) / 2   (rightward wave, using current INTO node from left)
-// V⁻_i = (V_i - Z * I_i) / 2   (leftward wave)
-// where Z = sqrt(L/C) is characteristic impedance.
-// At boundaries we extrapolate from nearest internal node.
-
+// Traveling wave decomposition: V⁺ = (V + Z·I)/2, V⁻ = (V - Z·I)/2
 function computeTravelingWaves(
   V: Float64Array,
   I: Float64Array,
@@ -294,21 +161,13 @@ function computeTravelingWaves(
   const vL = new Float64Array(N);
 
   for (let i = 0; i < N; i++) {
-    // Use the current on the inductor to the right of node i (or left for last node)
-    let iLocal: number;
-    if (i < N - 1) {
-      iLocal = I[i]; // current flowing right from node i
-    } else {
-      iLocal = I[N - 2]; // extrapolate from last inductor
-    }
+    const iLocal = i < N - 1 ? I[i] : I[N - 2];
     vR[i] = (V[i] + Z * iLocal) / 2;
     vL[i] = (V[i] - Z * iLocal) / 2;
   }
 
   return { vRight: vR, vLeft: vL };
 }
-
-// ─── State factory ───────────────────────────────────────────────────────────
 
 export function createInitialState(p: SimulationParams): SimulationState {
   const voltages = new Float64Array(p.N);
@@ -325,13 +184,11 @@ export function createInitialState(p: SimulationParams): SimulationState {
   return { voltages, currents, time: 0, energies, vRight: waves.vRight, vLeft: waves.vLeft };
 }
 
-// ─── Time advance ────────────────────────────────────────────────────────────
-
 export function advanceSimulation(
   state: SimulationState,
   dtTotal: number,
   p: SimulationParams,
-  subSteps = 10,
+  subSteps = 5,
 ): SimulationState {
   const dt = dtTotal / subSteps;
   let V = state.voltages;
@@ -359,63 +216,11 @@ export function advanceSimulation(
   return { voltages: V, currents: I, time: t, energies, vRight: waves.vRight, vLeft: waves.vLeft };
 }
 
-// ─── Analytics ───────────────────────────────────────────────────────────────
-
-export function computeGainCoefficient(energies: Float64Array, N: number): number {
-  const cIdx1 = Math.floor(N / 2) - 1;
-  const cIdx2 = Math.floor(N / 2);
-  const eCenter = Math.max(safeNum(energies[cIdx1]), safeNum(energies[cIdx2]));
-  const edgeIdx = [0, 1, 2, 3, N - 4, N - 3, N - 2, N - 1];
-  let eEdge = 0;
-  for (const i of edgeIdx) eEdge += safeNum(energies[i]);
-  eEdge /= edgeIdx.length;
-  if (eEdge < 1e-15 && eCenter < 1e-15) return 1.0;
-  if (eEdge < 1e-15) return 100.0;
-  const ratio = eCenter / eEdge;
-  return Number.isFinite(ratio) ? ratio : 1.0;
-}
-
-export function safeMax(arr: Float64Array): number {
-  let m = 0;
-  for (let i = 0; i < arr.length; i++) {
-    const v = arr[i];
-    if (Number.isFinite(v) && v > m) m = v;
-  }
-  return m;
-}
-
-export function safeSum(arr: Float64Array): number {
-  let s = 0;
-  for (let i = 0; i < arr.length; i++) {
-    const v = arr[i];
-    if (Number.isFinite(v)) s += v;
-  }
-  return s;
-}
-
-// Check if critical energy threshold (matter destruction) is reached
-export function checkMatterDestruction(
-  energies: Float64Array,
-  criticalEnergy: number,
-): { reached: boolean; maxEnergy: number; centerEnergy: number } {
-  const N = energies.length;
-  const cIdx1 = Math.floor(N / 2) - 1;
-  const cIdx2 = Math.floor(N / 2);
-  
-  const centerEnergy = Math.max(
-    Number.isFinite(energies[cIdx1]) ? energies[cIdx1] : 0,
-    Number.isFinite(energies[cIdx2]) ? energies[cIdx2] : 0
+export function getCenterPeak(state: SimulationState): number {
+  const N = state.voltages.length;
+  const cIdx = Math.floor(N / 2);
+  return Math.max(
+    Number.isFinite(state.energies[cIdx - 1]) ? state.energies[cIdx - 1] : 0,
+    Number.isFinite(state.energies[cIdx]) ? state.energies[cIdx] : 0
   );
-  
-  let maxEnergy = 0;
-  for (let i = 0; i < N; i++) {
-    const e = Number.isFinite(energies[i]) ? energies[i] : 0;
-    if (e > maxEnergy) maxEnergy = e;
-  }
-  
-  return {
-    reached: maxEnergy >= criticalEnergy,
-    maxEnergy,
-    centerEnergy,
-  };
 }
