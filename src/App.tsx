@@ -369,7 +369,16 @@ export default function App() {
             </div>
           </div>
           <p className="text-[10px] text-gray-500 mb-3">
-            Left source and right source both start at peak simultaneously → waves travel toward each other → collide at center → interference peaks (yellow dots) &nbsp;|&nbsp;
+            {params.reflectiveBoundaries !== false ? (
+              <>
+                <span className="text-yellow-400 font-bold">🔄 REFLECTIVE MODE:</span> Waves bounce from boundaries → multiple passes → constructive interference at center → <span className="text-red-400 font-bold">energy accumulates!</span>
+              </>
+            ) : (
+              <>
+                <span className="text-gray-400 font-bold">📥 ABSORBING MODE:</span> Waves absorbed by sources → no reflection → no accumulation
+              </>
+            )}
+            &nbsp;|&nbsp;
             <span className="text-cyan-400">f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz</span>, <span className="text-purple-400">f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz</span>
           </p>
 
@@ -614,6 +623,39 @@ export default function App() {
                 </label>
                 <input type="range" min="0.1" max="3.0" step="0.05" value={params.amplitude}
                   onChange={e => setParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))} className="w-full" />
+              </div>
+              
+              <div>
+                <label className="text-xs text-gray-400 mb-2 block">Boundary Type</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setParams(p => ({ ...p, reflectiveBoundaries: true }))}
+                    className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
+                      params.reflectiveBoundaries !== false
+                        ? 'bg-yellow-900/50 text-yellow-300 border-yellow-600 shadow-lg shadow-yellow-900/30'
+                        : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
+                    }`}
+                  >
+                    <div>🔄 Reflective</div>
+                    <div className="text-[9px] opacity-70 mt-0.5">Waves bounce back</div>
+                  </button>
+                  <button
+                    onClick={() => setParams(p => ({ ...p, reflectiveBoundaries: false }))}
+                    className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
+                      params.reflectiveBoundaries === false
+                        ? 'bg-gray-700 text-gray-300 border-gray-500'
+                        : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
+                    }`}
+                  >
+                    <div>📥 Absorbing</div>
+                    <div className="text-[9px] opacity-70 mt-0.5">Waves absorbed</div>
+                  </button>
+                </div>
+                <div className="text-[9px] text-gray-600 mt-2 bg-gray-900/50 rounded px-2 py-1">
+                  {params.reflectiveBoundaries !== false
+                    ? 'Waves reflect from boundaries → interfere at center → energy accumulates'
+                    : 'Waves absorbed by sources → no reflection → no accumulation'}
+                </div>
               </div>
               <div className="bg-gray-900/50 rounded-lg p-3 text-[10px] text-gray-500 space-y-1.5 border border-gray-800/30">
                 <div className="text-gray-400 font-bold mb-1">System Parameters</div>

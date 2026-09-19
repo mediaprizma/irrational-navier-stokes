@@ -11,6 +11,7 @@ export interface SimulationParams {
   R: number;
   amplitude: number;
   mode: 'irrational' | 'harmonic';
+  reflectiveBoundaries?: boolean;  // Если true — границы отражают волны
 }
 
 export interface SimulationState {
@@ -27,11 +28,12 @@ export const DEFAULT_PARAMS: SimulationParams = {
   N: 80,
   L: 0.01,
   C: 0.01,
-  G: 0.002,
+  G: 0.0001,  // Минимальная диссипация — чтобы энергия накапливалась
   omega1: 30.0,
   R: 1.475482818459,
   amplitude: 1.0,
   mode: 'irrational',
+  reflectiveBoundaries: true,  // Отражающие границы для накопления энергии
 };
 
 // Frequency display scale: ω_sim = 30 rad/s corresponds to f = 1 GHz
@@ -128,13 +130,26 @@ export function rk4Step(
 
   const k1 = computeDerivatives(V, I, t, p);
 
+  // Helper for boundary conditions
+  const applyBoundary = (v: Float64Array, tLocal: number) => {
+    if (p.reflectiveBoundaries) {
+      const reflectionCoeff = 0.85;
+      const sourceLeft = boundaryVoltageLeft(tLocal, p);
+      const sourceRight = boundaryVoltageRight(tLocal, p);
+      v[0] = (sourceLeft + reflectionCoeff * v[1]) / (1 + reflectionCoeff);
+      v[N - 1] = (sourceRight + reflectionCoeff * v[N - 2]) / (1 + reflectionCoeff);
+    } else {
+      v[0] = boundaryVoltageLeft(tLocal, p);
+      v[N - 1] = boundaryVoltageRight(tLocal, p);
+    }
+  };
+
   // k2
   const v2 = new Float64Array(N);
   const i2 = new Float64Array(nI);
   for (let j = 0; j < N; j++) v2[j] = V[j] + 0.5 * dt * k1.dV[j];
   for (let j = 0; j < nI; j++) i2[j] = I[j] + 0.5 * dt * k1.dI[j];
-  v2[0] = boundaryVoltageLeft(t + 0.5 * dt, p);
-  v2[N - 1] = boundaryVoltageRight(t + 0.5 * dt, p);
+  applyBoundary(v2, t + 0.5 * dt);
   const k2 = computeDerivatives(v2, i2, t + 0.5 * dt, p);
 
   // k3
@@ -142,8 +157,7 @@ export function rk4Step(
   const i3 = new Float64Array(nI);
   for (let j = 0; j < N; j++) v3[j] = V[j] + 0.5 * dt * k2.dV[j];
   for (let j = 0; j < nI; j++) i3[j] = I[j] + 0.5 * dt * k2.dI[j];
-  v3[0] = boundaryVoltageLeft(t + 0.5 * dt, p);
-  v3[N - 1] = boundaryVoltageRight(t + 0.5 * dt, p);
+  applyBoundary(v3, t + 0.5 * dt);
   const k3 = computeDerivatives(v3, i3, t + 0.5 * dt, p);
 
   // k4
@@ -151,8 +165,7 @@ export function rk4Step(
   const i4 = new Float64Array(nI);
   for (let j = 0; j < N; j++) v4[j] = V[j] + dt * k3.dV[j];
   for (let j = 0; j < nI; j++) i4[j] = I[j] + dt * k3.dI[j];
-  v4[0] = boundaryVoltageLeft(t + dt, p);
-  v4[N - 1] = boundaryVoltageRight(t + dt, p);
+  applyBoundary(v4, t + dt);
   const k4 = computeDerivatives(v4, i4, t + dt, p);
 
   // Combine
@@ -167,9 +180,23 @@ export function rk4Step(
     newI[j] = I[j] + dt6 * (k1.dI[j] + 2 * k2.dI[j] + 2 * k3.dI[j] + k4.dI[j]);
   }
 
-  // Enforce Dirichlet boundaries
-  newV[0] = boundaryVoltageLeft(t + dt, p);
-  newV[N - 1] = boundaryVoltageRight(t + dt, p);
+  // Boundary conditions
+  if (p.reflectiveBoundaries) {
+    // Reflective boundaries: source + reflected wave
+    // Waves bounce back and interfere, accumulating energy at center
+    const reflectionCoeff = 0.85;  // 85% reflection
+    const sourceLeft = boundaryVoltageLeft(t + dt, p);
+    const sourceRight = boundaryVoltageRight(t + dt, p);
+    
+    // V[0] = source + reflection * (V[1] - V[0])
+    // Rearranging: V[0] * (1 + reflectionCoeff) = source + reflectionCoeff * V[1]
+    newV[0] = (sourceLeft + reflectionCoeff * newV[1]) / (1 + reflectionCoeff);
+    newV[N - 1] = (sourceRight + reflectionCoeff * newV[N - 2]) / (1 + reflectionCoeff);
+  } else {
+    // Absorbing boundaries: waves are absorbed by sources (no reflection)
+    newV[0] = boundaryVoltageLeft(t + dt, p);
+    newV[N - 1] = boundaryVoltageRight(t + dt, p);
+  }
 
   // NaN / Infinity guard
   sanitizeArray(newV);
