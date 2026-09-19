@@ -180,7 +180,22 @@ export default function App() {
             <div className="text-[9px] text-gray-500 mt-1">
               f₁ = {fmtFixed(omegaToGHz(irrParams.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(irrOmega2), 2)} GHz | R = {irrParams.R.toFixed(4)}
             </div>
+            
+            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">AMPLITUDE (Power)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="0.1" max="5.0" step="0.1"
+                value={irrParams.amplitude}
+                onChange={(e) => setIrrParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-cyan-300 font-mono w-16">A = {fmtFixed(irrParams.amplitude, 1)}</span>
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1">
+              Increase amplitude to drive stronger waves toward center collapse
+            </div>
           </div>
+          
           <div className="bg-[#0a0a1a] rounded-lg border border-purple-900/30 p-3">
             <div className="text-[10px] text-purple-400 font-bold mb-2">HARMONIC — Base Frequency f₁</div>
             <div className="flex items-center gap-2">
@@ -194,6 +209,20 @@ export default function App() {
             </div>
             <div className="text-[9px] text-gray-500 mt-1">
               f₁ = {fmtFixed(omegaToGHz(harmParams.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(harmOmega2), 2)} GHz | R = 2.0
+            </div>
+            
+            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">AMPLITUDE (Power)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="0.1" max="5.0" step="0.1"
+                value={harmParams.amplitude}
+                onChange={(e) => setHarmParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-purple-300 font-mono w-16">A = {fmtFixed(harmParams.amplitude, 1)}</span>
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1">
+              Increase amplitude to drive stronger waves toward center collapse
             </div>
           </div>
         </div>
