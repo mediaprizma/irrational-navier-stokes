@@ -9,37 +9,9 @@ import {
   safeMax,
   safeSum,
   omegaToGHz,
-  GHzToOmega,
 } from './simulation';
-import Oscilloscope from './Oscilloscope';
-import Waterfall from './Waterfall';
-import Spectrum from './Spectrum';
 import CollisionView from './CollisionView';
 import EnergyAccumulation from './EnergyAccumulation';
-
-// ─── Ring buffer ─────────────────────────────────────────────────────────────
-
-class RingBuffer {
-  data: Float32Array;
-  writeIdx = 0;
-  count = 0;
-
-  constructor(size: number) {
-    this.data = new Float32Array(size);
-  }
-
-  push(v: number) {
-    this.data[this.writeIdx] = Number.isFinite(v) ? v : 0;
-    this.writeIdx = (this.writeIdx + 1) % this.data.length;
-    if (this.count < this.data.length) this.count++;
-  }
-
-  reset() {
-    this.data.fill(0);
-    this.writeIdx = 0;
-    this.count = 0;
-  }
-}
 
 // ─── Color mapping ───────────────────────────────────────────────────────────
 
@@ -62,55 +34,60 @@ function fmtFixed(v: number, d = 2): string { return Number.isFinite(v) ? v.toFi
 
 const SIM_DT = 0.003;
 const SUB_STEPS = 5;
-const SCOPE_SIZE = 512;
-const SCOPE_SAMPLE_INTERVAL = 0.001;
-const WATERFALL_ROWS = 150;
-const WATERFALL_SAMPLE_INTERVAL = 0.005;
 
 // ─── Main App ────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [params, setParams] = useState<SimulationParams>({ ...DEFAULT_PARAMS });
   const [isRunning, setIsRunning] = useState(false);
-  const [state, setState] = useState<SimulationState>(() => createInitialState(DEFAULT_PARAMS));
-  const [gainCoeff, setGainCoeff] = useState(1.0);
-  const [maxEnergyHistory, setMaxEnergyHistory] = useState<{ t: number; e: number }[]>([]);
-  const [, setScopeTick] = useState(0);
 
-  // Oscilloscope buffers
-  const scopeLeftRef = useRef(new RingBuffer(SCOPE_SIZE));
-  const scopeCenterRef = useRef(new RingBuffer(SCOPE_SIZE));
-  const scopeRightRef = useRef(new RingBuffer(SCOPE_SIZE));
+  // Two parallel simulations
+  const [irrState, setIrrState] = useState<SimulationState>(() =>
+    createInitialState({ ...DEFAULT_PARAMS, mode: 'irrational' })
+  );
+  const [harmState, setHarmState] = useState<SimulationState>(() =>
+    createInitialState({ ...DEFAULT_PARAMS, mode: 'harmonic' })
+  );
 
-  // Traveling wave buffers at center
-  const scopeVPlusRef = useRef(new RingBuffer(SCOPE_SIZE));   // V⁺ rightward (from left source)
-  const scopeVMinusRef = useRef(new RingBuffer(SCOPE_SIZE));  // V⁻ leftward (from right source)
-  const scopeVTotalRef = useRef(new RingBuffer(SCOPE_SIZE));  // V⁺ + V⁻ = total at center
+  const [irrGain, setIrrGain] = useState(1.0);
+  const [harmGain, setHarmGain] = useState(1.0);
 
-  // Waterfall
-  const waterfallRef = useRef<Float32Array[]>([]);
+  // Energy accumulation histories
+  const [irrAccHistory, setIrrAccHistory] = useState<{ t: number; eCenter: number; eEdge: number }[]>([]);
+  const [harmAccHistory, setHarmAccHistory] = useState<{ t: number; eCenter: number; eEdge: number }[]>([]);
+  const irrAccRef = useRef({ center: 0, edge: 0 });
+  const harmAccRef = useRef({ center: 0, edge: 0 });
 
-  // Energy accumulation history — rolling average over last N seconds
-  const [energyAccHistory, setEnergyAccHistory] = useState<{ t: number; eCenter: number; eEdge: number }[]>([]);
-  const rollingWindowRef = useRef<{ t: number; eCenter: number; eEdge: number }[]>([]);
-  const ROLLING_WINDOW_SEC = 0.5; // Show average over last 0.5 seconds
-
-  // Pulse animation
-  const [pulsePhase, setPulsePhase] = useState(0);
-
-  const stateRef = useRef(state);
+  const irrStateRef = useRef(irrState);
+  const harmStateRef = useRef(harmState);
   const paramsRef = useRef(params);
   const animFrameRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const runningRef = useRef(isRunning);
   const accumulatorRef = useRef(0);
   const frameTickRef = useRef(0);
-  const lastScopeSampleTime = useRef(0);
-  const lastWaterfallTime = useRef(0);
 
-  useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => { irrStateRef.current = irrState; }, [irrState]);
+  useEffect(() => { harmStateRef.current = harmState; }, [harmState]);
   useEffect(() => { paramsRef.current = params; }, [params]);
   useEffect(() => { runningRef.current = isRunning; }, [isRunning]);
+
+  // Compute energy metrics for a state
+  const computeEnergyMetrics = (state: SimulationState, N: number) => {
+    const cIdx1 = Math.floor(N / 2) - 1;
+    const cIdx2 = Math.floor(N / 2);
+    const eCenter = (Number.isFinite(state.energies[cIdx1]) ? state.energies[cIdx1] : 0)
+                  + (Number.isFinite(state.energies[cIdx2]) ? state.energies[cIdx2] : 0);
+    const eEdge = (Number.isFinite(state.energies[0]) ? state.energies[0] : 0)
+                + (Number.isFinite(state.energies[1]) ? state.energies[1] : 0)
+                + (Number.isFinite(state.energies[2]) ? state.energies[2] : 0)
+                + (Number.isFinite(state.energies[3]) ? state.energies[3] : 0)
+                + (Number.isFinite(state.energies[N - 4]) ? state.energies[N - 4] : 0)
+                + (Number.isFinite(state.energies[N - 3]) ? state.energies[N - 3] : 0)
+                + (Number.isFinite(state.energies[N - 2]) ? state.energies[N - 2] : 0)
+                + (Number.isFinite(state.energies[N - 1]) ? state.energies[N - 1] : 0);
+    return { eCenter, eEdge };
+  };
 
   const simulationLoop = useCallback(() => {
     if (!runningRef.current) return;
@@ -120,110 +97,49 @@ export default function App() {
     lastTimeRef.current = now;
     accumulatorRef.current += Math.min(realDt, 0.05);
 
-    let currentState = stateRef.current;
+    let irrCurrent = irrStateRef.current;
+    let harmCurrent = harmStateRef.current;
     let stepsThisFrame = 0;
     const maxStepsPerFrame = 50;
 
     while (accumulatorRef.current >= SIM_DT && stepsThisFrame < maxStepsPerFrame) {
-      currentState = advanceSimulation(currentState, SIM_DT, paramsRef.current, SUB_STEPS);
+      // Advance both simulations
+      irrCurrent = advanceSimulation(irrCurrent, SIM_DT, { ...paramsRef.current, mode: 'irrational' }, SUB_STEPS);
+      harmCurrent = advanceSimulation(harmCurrent, SIM_DT, { ...paramsRef.current, mode: 'harmonic' }, SUB_STEPS);
       accumulatorRef.current -= SIM_DT;
       stepsThisFrame++;
 
-      // Sample oscilloscopes
-      if (currentState.time - lastScopeSampleTime.current >= SCOPE_SAMPLE_INTERVAL) {
-        lastScopeSampleTime.current = currentState.time;
-        const N = paramsRef.current.N;
-        const cIdx = Math.floor(N / 2);
-        scopeLeftRef.current.push(currentState.voltages[0]);
-        scopeCenterRef.current.push(currentState.voltages[cIdx]);
-        scopeRightRef.current.push(currentState.voltages[N - 1]);
-        
-        // Traveling waves at center
-        const vPlus = currentState.vRight[cIdx];
-        const vMinus = currentState.vLeft[cIdx];
-        scopeVPlusRef.current.push(vPlus);
-        scopeVMinusRef.current.push(vMinus);
-        scopeVTotalRef.current.push(vPlus + vMinus);
-      }
-
-      // Waterfall
-      if (currentState.time - lastWaterfallTime.current >= WATERFALL_SAMPLE_INTERVAL) {
-        lastWaterfallTime.current = currentState.time;
-        const snapshot = new Float32Array(paramsRef.current.N);
-        for (let i = 0; i < paramsRef.current.N; i++) {
-          snapshot[i] = Number.isFinite(currentState.voltages[i]) ? currentState.voltages[i] : 0;
-        }
-        waterfallRef.current.push(snapshot);
-        if (waterfallRef.current.length > WATERFALL_ROWS) waterfallRef.current.shift();
-      }
-
-      // Energy accumulation — rolling window average
-      const N = paramsRef.current.N;
-      const cIdx1 = Math.floor(N / 2) - 1;
-      const cIdx2 = Math.floor(N / 2);
-      const eCenterNow = (Number.isFinite(currentState.energies[cIdx1]) ? currentState.energies[cIdx1] : 0)
-                       + (Number.isFinite(currentState.energies[cIdx2]) ? currentState.energies[cIdx2] : 0);
-      const eEdgeNow = (Number.isFinite(currentState.energies[0]) ? currentState.energies[0] : 0)
-                     + (Number.isFinite(currentState.energies[1]) ? currentState.energies[1] : 0)
-                     + (Number.isFinite(currentState.energies[2]) ? currentState.energies[2] : 0)
-                     + (Number.isFinite(currentState.energies[3]) ? currentState.energies[3] : 0)
-                     + (Number.isFinite(currentState.energies[N - 4]) ? currentState.energies[N - 4] : 0)
-                     + (Number.isFinite(currentState.energies[N - 3]) ? currentState.energies[N - 3] : 0)
-                     + (Number.isFinite(currentState.energies[N - 2]) ? currentState.energies[N - 2] : 0)
-                     + (Number.isFinite(currentState.energies[N - 1]) ? currentState.energies[N - 1] : 0);
-      
-      rollingWindowRef.current.push({
-        t: currentState.time,
-        eCenter: eCenterNow,
-        eEdge: eEdgeNow,
-      });
-      
-      // Keep only last ROLLING_WINDOW_SEC seconds
-      const cutoffTime = currentState.time - ROLLING_WINDOW_SEC;
-      while (rollingWindowRef.current.length > 0 && rollingWindowRef.current[0].t < cutoffTime) {
-        rollingWindowRef.current.shift();
-      }
+      // Accumulate energy
+      const irrE = computeEnergyMetrics(irrCurrent, paramsRef.current.N);
+      const harmE = computeEnergyMetrics(harmCurrent, paramsRef.current.N);
+      irrAccRef.current.center += irrE.eCenter * SIM_DT;
+      irrAccRef.current.edge += irrE.eEdge * SIM_DT;
+      harmAccRef.current.center += harmE.eCenter * SIM_DT;
+      harmAccRef.current.edge += harmE.eEdge * SIM_DT;
     }
 
     if (stepsThisFrame > 0) {
-      const gain = computeGainCoefficient(currentState.energies, paramsRef.current.N);
-      setState(currentState);
-      setGainCoeff(Number.isFinite(gain) ? gain : 1.0);
-      stateRef.current = currentState;
+      const irrG = computeGainCoefficient(irrCurrent.energies, paramsRef.current.N);
+      const harmG = computeGainCoefficient(harmCurrent.energies, paramsRef.current.N);
+      setIrrState(irrCurrent);
+      setHarmState(harmCurrent);
+      setIrrGain(Number.isFinite(irrG) ? irrG : 1.0);
+      setHarmGain(Number.isFinite(harmG) ? harmG : 1.0);
+      irrStateRef.current = irrCurrent;
+      harmStateRef.current = harmCurrent;
 
       frameTickRef.current++;
       if (frameTickRef.current % 5 === 0) {
-        const maxE = safeMax(currentState.energies);
-        if (Number.isFinite(maxE)) {
-          setMaxEnergyHistory(hist => {
-            const next = [...hist, { t: currentState.time, e: maxE }];
-            if (next.length > 300) next.shift();
-            return next;
-          });
-        }
-        setScopeTick(t => t + 1);
-        setPulsePhase(p => (p + 1) % 100);
-
-        // Update energy accumulation history — compute rolling average
-        if (rollingWindowRef.current.length > 0) {
-          let sumCenter = 0, sumEdge = 0;
-          for (const pt of rollingWindowRef.current) {
-            sumCenter += pt.eCenter;
-            sumEdge += pt.eEdge;
-          }
-          const avgCenter = sumCenter / rollingWindowRef.current.length;
-          const avgEdge = sumEdge / rollingWindowRef.current.length;
-          
-          setEnergyAccHistory(hist => {
-            const next = [...hist, {
-              t: currentState.time,
-              eCenter: avgCenter,
-              eEdge: avgEdge,
-            }];
-            if (next.length > 500) next.shift();
-            return next;
-          });
-        }
+        setIrrAccHistory(hist => {
+          const next = [...hist, { t: irrCurrent.time, eCenter: irrAccRef.current.center, eEdge: irrAccRef.current.edge }];
+          if (next.length > 500) next.shift();
+          return next;
+        });
+        setHarmAccHistory(hist => {
+          const next = [...hist, { t: harmCurrent.time, eCenter: harmAccRef.current.center, eEdge: harmAccRef.current.edge }];
+          if (next.length > 500) next.shift();
+          return next;
+        });
       }
     }
 
@@ -243,93 +159,35 @@ export default function App() {
 
   const handleReset = () => {
     setIsRunning(false);
-    const newState = createInitialState(params);
-    setState(newState);
-    setGainCoeff(1.0);
-    setMaxEnergyHistory([]);
+    const irrNew = createInitialState({ ...params, mode: 'irrational' });
+    const harmNew = createInitialState({ ...params, mode: 'harmonic' });
+    setIrrState(irrNew);
+    setHarmState(harmNew);
+    setIrrGain(1.0);
+    setHarmGain(1.0);
+    setIrrAccHistory([]);
+    setHarmAccHistory([]);
+    irrAccRef.current = { center: 0, edge: 0 };
+    harmAccRef.current = { center: 0, edge: 0 };
     frameTickRef.current = 0;
-    stateRef.current = newState;
+    irrStateRef.current = irrNew;
+    harmStateRef.current = harmNew;
     accumulatorRef.current = 0;
-    lastScopeSampleTime.current = 0;
-    lastWaterfallTime.current = 0;
-    scopeLeftRef.current.reset();
-    scopeCenterRef.current.reset();
-    scopeRightRef.current.reset();
-    scopeVPlusRef.current.reset();
-    scopeVMinusRef.current.reset();
-    scopeVTotalRef.current.reset();
-    waterfallRef.current = [];
-    rollingWindowRef.current = [];
-    setEnergyAccHistory([]);
-    setPulsePhase(0);
   };
 
-  const handleModeChange = (mode: 'irrational' | 'harmonic') => {
-    setParams(prev => ({ ...prev, mode }));
-  };
-
-  // ─── Derived metrics ───────────────────────────────────────────────────────
-
-  const localizationActive = Number.isFinite(gainCoeff) && gainCoeff > 2.0;
-  const maxEnergy = safeMax(state.energies);
-  const omega2 = params.mode === 'irrational' ? params.R * params.omega1 : 2.0 * params.omega1;
-  const centerIdx1 = Math.floor(params.N / 2) - 1;
-  const centerIdx2 = Math.floor(params.N / 2);
-  const centerEnergy = Math.max(
-    Number.isFinite(state.energies[centerIdx1]) ? state.energies[centerIdx1] : 0,
-    Number.isFinite(state.energies[centerIdx2]) ? state.energies[centerIdx2] : 0,
-  );
-  const totalEnergy = safeSum(state.energies);
-  const edgeAvg = (() => {
-    const idx = [0, 1, 2, 3, params.N - 4, params.N - 3, params.N - 2, params.N - 1];
-    let s = 0;
-    for (const i of idx) s += Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
-    return s / idx.length;
-  })();
-
-  const historySvgPoints = (() => {
-    if (maxEnergyHistory.length < 2) return '';
-    const histMax = Math.max(...maxEnergyHistory.map(h => Number.isFinite(h.e) ? h.e : 0), 1e-10);
-    return maxEnergyHistory.map((item, i) => {
-      const e = Number.isFinite(item.e) ? item.e : 0;
-      const y = 100 - (e / histMax) * 90;
-      return `${i},${y.toFixed(1)}`;
-    }).join(' ');
-  })();
-  const historyFillPoints = (() => {
-    if (maxEnergyHistory.length < 2) return '';
-    const histMax = Math.max(...maxEnergyHistory.map(h => Number.isFinite(h.e) ? h.e : 0), 1e-10);
-    const pts = maxEnergyHistory.map((item, i) => {
-      const e = Number.isFinite(item.e) ? item.e : 0;
-      const y = 100 - (e / histMax) * 90;
-      return `${i},${y.toFixed(1)}`;
-    }).join(' ');
-    return `0,100 ${pts} ${maxEnergyHistory.length - 1},100`;
-  })();
-
-  const scopeSampleRate = 1 / SCOPE_SAMPLE_INTERVAL;
-
-  // Pulse animation
-  const leftPulses = [0, 1, 2, 3].map(k => {
-    const phase = ((pulsePhase + k * 25) % 100) / 100;
-    return phase * 0.45;
-  });
-  const rightPulses = [0, 1, 2, 3].map(k => {
-    const phase = ((pulsePhase + k * 25) % 100) / 100;
-    return 1.0 - phase * 0.45;
-  });
+  const omega2 = params.R * params.omega1;
 
   return (
-    <div className="min-h-screen bg-[#050510] text-white font-mono overflow-x-hidden">
+    <div className="min-h-screen bg-[#050510] text-white font-mono overflow-hidden">
       {/* ── Header ── */}
-      <header className="border-b border-gray-800/50 px-4 sm:px-6 py-3 bg-[#0a0a1a]/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto flex items-center justify-between flex-wrap gap-2">
+      <header className="border-b border-gray-800/50 px-4 py-2 bg-[#0a0a1a]/80 backdrop-blur-sm sticky top-0 z-50">
+        <div className="max-w-[1920px] mx-auto flex items-center justify-between flex-wrap gap-2">
           <div>
-            <h1 className="text-lg sm:text-xl font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
-              ⚡ LC-Chain EM Simulator
+            <h1 className="text-base font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
+              ⚡ LC-Chain: Irrational vs Harmonic — Head-to-Head Comparison
             </h1>
-            <p className="text-[10px] sm:text-xs text-gray-500 mt-0.5">
-              Counter-propagating waves • Irrational spectral pumping • Energy localization
+            <p className="text-[9px] text-gray-500 mt-0.5">
+              f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz | N = {params.N} nodes | Reflective boundaries
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -337,444 +195,196 @@ export default function App() {
               isRunning ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-500'
             }`}>{isRunning ? '● RUNNING' : '○ STOPPED'}</div>
             <button onClick={() => setIsRunning(!isRunning)}
-              className={`px-3 sm:px-4 py-2 rounded-lg font-bold text-xs transition-all ${
+              className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${
                 isRunning ? 'bg-yellow-600 hover:bg-yellow-500 text-black' : 'bg-cyan-600 hover:bg-cyan-500 text-white'
               }`}>{isRunning ? '⏸ Pause' : '▶ Start'}</button>
             <button onClick={handleReset}
-              className="px-3 sm:px-4 py-2 rounded-lg font-bold text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700">↺ Reset</button>
+              className="px-3 py-1.5 rounded-lg font-bold text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700">↺ Reset</button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-4 space-y-4">
-
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* COLLISION VIEW — MAIN VISUALIZATION                                */}
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        <section className="bg-[#0a0a1a] rounded-xl border-2 border-cyan-900/50 p-4 shadow-2xl shadow-cyan-900/20">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-bold text-cyan-400 uppercase tracking-wider">
-              ⚡ Collision View — Waves Running Head-On
-            </h2>
-            <div className="flex items-center gap-3 text-[10px]">
-              <span className="flex items-center gap-1">
-                <span className="w-3 h-0.5 bg-cyan-400 inline-block" /> V⁺ →
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-3 h-0.5 bg-purple-400 inline-block" /> ← V⁻
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-3 h-0.5 bg-yellow-400 inline-block" /> V⁺+V⁻
-              </span>
+      <main className="max-w-[1920px] mx-auto px-4 py-3 space-y-3">
+        {/* ── Controls ── */}
+        <div className="grid grid-cols-4 gap-3">
+          <div className="bg-[#0a0a1a] rounded-lg border border-gray-800/50 p-3">
+            <label className="flex justify-between text-[10px] mb-1">
+              <span className="text-gray-400">Frequency f₁</span>
+              <span className="text-cyan-400 font-bold">{fmtFixed(omegaToGHz(params.omega1), 2)} GHz</span>
+            </label>
+            <input type="range" min="5" max="100" step="0.5" value={params.omega1}
+              onChange={e => setParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+          <div className="bg-[#0a0a1a] rounded-lg border border-gray-800/50 p-3">
+            <label className="flex justify-between text-[10px] mb-1">
+              <span className="text-gray-400">Amplitude A</span>
+              <span className="text-green-400 font-bold">{fmtFixed(params.amplitude, 2)}</span>
+            </label>
+            <input type="range" min="0.1" max="3.0" step="0.05" value={params.amplitude}
+              onChange={e => setParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+          <div className="bg-[#0a0a1a] rounded-lg border border-gray-800/50 p-3">
+            <label className="flex justify-between text-[10px] mb-1">
+              <span className="text-gray-400">Dissipation G</span>
+              <span className="text-orange-400 font-bold">{fmtFixed(params.G, 4)}</span>
+            </label>
+            <input type="range" min="0" max="0.01" step="0.0001" value={params.G}
+              onChange={e => setParams(p => ({ ...p, G: parseFloat(e.target.value) }))} className="w-full" />
+          </div>
+          <div className="bg-[#0a0a1a] rounded-lg border border-gray-800/50 p-3">
+            <label className="flex justify-between text-[10px] mb-1">
+              <span className="text-gray-400">Reflection coeff</span>
+              <span className="text-yellow-400 font-bold">0.85</span>
+            </label>
+            <div className="text-[9px] text-gray-600 mt-1">
+              λ₁ = {fmtFixed(2 * Math.PI / params.omega1 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes |
+              λ₂ = {fmtFixed(2 * Math.PI / omega2 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes
             </div>
           </div>
-          <p className="text-[10px] text-gray-500 mb-3">
-            {params.reflectiveBoundaries !== false ? (
-              <>
-                <span className="text-yellow-400 font-bold">🔄 REFLECTIVE MODE:</span> Waves bounce from boundaries → multiple passes → constructive interference at center → <span className="text-red-400 font-bold">energy accumulates!</span>
-              </>
-            ) : (
-              <>
-                <span className="text-gray-400 font-bold">📥 ABSORBING MODE:</span> Waves absorbed by sources → no reflection → no accumulation
-              </>
-            )}
-            &nbsp;|&nbsp;
-            <span className="text-cyan-400">f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz</span>, <span className="text-purple-400">f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz</span>
-          </p>
+        </div>
 
-          {/* THE MAIN GRAPH */}
-          <CollisionView
-            vRight={state.vRight}
-            vLeft={state.vLeft}
-            N={params.N}
-            time={state.time}
-          />
-
-          {/* Animated pulse line below */}
-          <div className="relative bg-gray-900/50 rounded-lg p-3 border border-gray-800/30 mt-3">
-            <div className="relative flex items-center justify-between px-6 py-3 min-h-[40px]">
-              <div className="absolute top-1/2 left-6 right-6 h-0.5 bg-gray-700/50 -translate-y-1/2" />
-              {leftPulses.map((pos, k) => (
-                <div key={`lp-${k}`}
-                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-cyan-400 opacity-80 blur-[1px]"
-                  style={{ left: `${6 + pos * 88}%` }} />
-              ))}
-              {rightPulses.map((pos, k) => (
-                <div key={`rp-${k}`}
-                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-purple-400 opacity-80 blur-[1px]"
-                  style={{ left: `${6 + pos * 88}%` }} />
-              ))}
-              {Array.from(state.voltages).map((_, i) => {
-                const N = params.N;
-                const cIdx1 = Math.floor(N / 2) - 1;
-                const cIdx2 = Math.floor(N / 2);
-                const isCenter = i === cIdx1 || i === cIdx2;
-                const energy = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
-                const color = energyToColor(energy, maxEnergy);
-                return (
-                  <div key={i} className="relative z-10">
-                    <div className={`w-2 h-2 rounded-full border ${
-                      isCenter ? 'border-yellow-400 ring-2 ring-yellow-400/40' : 'border-gray-600'
-                    }`} style={{ backgroundColor: color }} />
-                  </div>
-                );
-              })}
-            </div>
-            <div className="flex justify-between items-center mt-1">
-              <div className="text-cyan-400 text-[10px] font-bold">◀ SOURCE →→→</div>
-              <div className="text-yellow-400 text-[10px] font-bold">⚡ COLLISION</div>
-              <div className="text-purple-400 text-[10px] font-bold">←←← SOURCE ▶</div>
-            </div>
-          </div>
-        </section>
-
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* ENERGY ACCUMULATION — THE KEY QUESTION                             */}
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        <section className="bg-[#0a0a1a] rounded-xl border-2 border-yellow-900/50 p-4 shadow-2xl shadow-yellow-900/20">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-bold text-yellow-400 uppercase tracking-wider">
-              🔋 Energy Accumulation — Does the scheme pump energy to center?
-            </h2>
-            {(() => {
-              const last = energyAccHistory[energyAccHistory.length - 1];
-              if (!last) return null;
-              const K = last.eEdge > 1e-15 ? last.eCenter / last.eEdge : 1;
-              const pumping = K > 1.5;
-              return (
-                <div className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
-                  pumping ? 'bg-red-900/50 text-red-300 border border-red-700' : 'bg-gray-800 text-gray-400 border border-gray-700'
-                }`}>
-                  {pumping ? `⚡ YES — K=${K.toFixed(2)}×` : `○ NO — K=${K.toFixed(2)}×`}
-                </div>
-              );
-            })()}
-          </div>
-          <p className="text-[10px] text-gray-500 mb-3">
-            <span className="text-yellow-400 font-bold">Yellow</span> = rolling average energy at center nodes &nbsp;|&nbsp;
-            <span className="text-purple-400 font-bold">Purple</span> = rolling average energy at edge nodes<br/>
-            If <span className="text-yellow-400 font-bold">yellow is higher</span> → the irrational pumping scheme <span className="text-red-400 font-bold">DOES concentrate energy at the center</span>
-          </p>
-          <EnergyAccumulation history={energyAccHistory} height={240} />
-          <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
-            <div className="bg-gray-900/50 rounded p-2 border border-gray-800/30">
-              <span className="text-gray-500">⟨E_center⟩ =</span>
-              <span className="text-yellow-400 font-bold ml-1">
-                {energyAccHistory.length > 0 ? energyAccHistory[energyAccHistory.length - 1].eCenter.toExponential(2) : '0.00e+0'}
-              </span>
-            </div>
-            <div className="bg-gray-900/50 rounded p-2 border border-gray-800/30">
-              <span className="text-gray-500">⟨E_edge⟩ =</span>
-              <span className="text-purple-400 font-bold ml-1">
-                {energyAccHistory.length > 0 ? energyAccHistory[energyAccHistory.length - 1].eEdge.toExponential(2) : '0.00e+0'}
-              </span>
-            </div>
-            <div className="bg-gray-900/50 rounded p-2 border border-gray-800/30">
-              <span className="text-gray-500">Ratio K =</span>
-              <span className={`font-bold ml-1 ${
-                energyAccHistory.length > 0 && energyAccHistory[energyAccHistory.length - 1].eCenter > energyAccHistory[energyAccHistory.length - 1].eEdge * 1.5
-                  ? 'text-red-400' : 'text-gray-400'
+        {/* ── Collision Views side by side ── */}
+        <div className="grid grid-cols-2 gap-3">
+          {/* Irrational */}
+          <section className="bg-[#0a0a1a] rounded-lg border-2 border-cyan-900/50 p-3">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-xs font-bold text-cyan-400">
+                ⚡ IRRATIONAL — R = {params.R}
+              </h2>
+              <div className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                irrGain > 1.5 ? 'bg-red-900/50 text-red-300 border border-red-700' : 'bg-gray-800 text-gray-500'
               }`}>
-                {energyAccHistory.length > 0 && energyAccHistory[energyAccHistory.length - 1].eEdge > 1e-15
-                  ? (energyAccHistory[energyAccHistory.length - 1].eCenter / energyAccHistory[energyAccHistory.length - 1].eEdge).toFixed(2) + '×'
-                  : '—'}
-              </span>
+                K = {fmtFixed(irrGain, 2)}×
+              </div>
             </div>
-          </div>
-        </section>
+            <CollisionView vRight={irrState.vRight} vLeft={irrState.vLeft} N={params.N} time={irrState.time} />
+          </section>
 
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* SPECTRUM ANALYZER — V⁺+V⁻                                         */}
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-yellow-900/30 p-4">
-          <h2 className="text-xs font-bold text-yellow-400 uppercase tracking-wider mb-3">
-            📊 Spectrum of V⁺+V⁻ at Center — Two Peaks from Irrational Pumping
-          </h2>
-          <Spectrum
-            buffer={scopeVTotalRef.current.data}
-            writeIdx={scopeVTotalRef.current.writeIdx}
-            length={scopeVTotalRef.current.count}
-            sampleRate={scopeSampleRate}
-            label="|V_total(f)| at center"
-            color="rgb(255, 200, 0)"
-            height={140}
-          />
-          <div className="mt-2 text-[9px] text-gray-600 text-center">
-            Two spectral peaks at f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz and f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz
-            {params.mode === 'irrational' && ' • Irrational ratio → quasi-periodic beating → energy accumulates at center'}
-          </div>
-        </section>
-
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* SPACE-TIME WATERFALL                                               */}
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            🌊 Space-Time Waterfall — Waves Propagating Toward Each Other
-          </h2>
-          <Waterfall history={waterfallRef.current} maxRows={WATERFALL_ROWS} N={params.N} mode="voltage" />
-          <div className="mt-2 flex justify-between text-[9px] text-gray-600">
-            <span>↑ Recent (top) → Past (bottom) &nbsp;|&nbsp; Diagonal streaks = traveling waves</span>
-            <span>Yellow dashed = focus nodes</span>
-          </div>
-        </section>
-
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* ENERGY PROFILE                                                     */}
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            ⚡ Energy Profile — {params.N} Nodes
-          </h2>
-          <div className="relative overflow-x-auto">
-            <div className="relative flex items-end justify-between gap-0.5 px-2 py-4 min-w-[600px]">
-              {Array.from(state.voltages).map((_, i) => {
-                const N = params.N;
-                const cIdx1 = Math.floor(N / 2) - 1;
-                const cIdx2 = Math.floor(N / 2);
-                const isCenter = i === cIdx1 || i === cIdx2;
-                const isEdge = i <= 3 || i >= N - 4;
-                const energy = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
-                const color = energyToColor(energy, maxEnergy);
-                const barHeight = 10 + (energy / Math.max(maxEnergy, 1e-10)) * 120;
-                return (
-                  <div key={i} className="flex flex-col items-center flex-1">
-                    <div className="w-full max-w-[12px] rounded-t transition-all duration-100"
-                      style={{ height: `${barHeight}px`, backgroundColor: color,
-                        boxShadow: energy / Math.max(maxEnergy, 1e-10) > 0.5 ? `0 0 ${8 + 20 * (energy / Math.max(maxEnergy, 1e-10))}px ${color}` : 'none' }} />
-                    <div className={`w-2 h-2 rounded-full mt-0.5 transition-all duration-100 ${isCenter ? 'ring-2 ring-yellow-400/60' : ''}`}
-                      style={{ backgroundColor: color }} />
-                    <span className={`text-[7px] mt-0.5 ${isCenter ? 'text-yellow-400 font-bold' : isEdge ? 'text-purple-400' : 'text-gray-600'}`}>{i % 10 === 0 ? i : ''}</span>
-                    {isCenter && <span className="text-[6px] text-yellow-500 font-bold">▼</span>}
-                  </div>
-                );
-              })}
+          {/* Harmonic */}
+          <section className="bg-[#0a0a1a] rounded-lg border-2 border-purple-900/50 p-3">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="text-xs font-bold text-purple-400">
+                ∿ HARMONIC — R = 2.0
+              </h2>
+              <div className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                harmGain > 1.5 ? 'bg-red-900/50 text-red-300 border border-red-700' : 'bg-gray-800 text-gray-500'
+              }`}>
+                K = {fmtFixed(harmGain, 2)}×
+              </div>
             </div>
-            <div className="flex justify-between px-2 mt-1 min-w-[600px]">
-              <div className="text-[9px] text-cyan-500 font-bold">◀ V⁺ SOURCE</div>
-              <div className="text-[9px] text-yellow-500 font-bold">▼ COLLISION / FOCUS</div>
-              <div className="text-[9px] text-purple-500 font-bold">V⁻ SOURCE ▶</div>
-            </div>
-          </div>
-          <div className="mt-4">
-            <div className="text-[9px] text-gray-500 mb-1">Energy Density Heatmap</div>
-            <div className="flex h-6 rounded overflow-hidden border border-gray-800/50">
-              {Array.from(state.energies).map((e, i) => (
-                <div key={i} className="flex-1 transition-colors duration-100"
-                  style={{ backgroundColor: energyToColor(Number.isFinite(e) ? e : 0, maxEnergy) }} />
-              ))}
-            </div>
-          </div>
-        </section>
+            <CollisionView vRight={harmState.vRight} vLeft={harmState.vLeft} N={params.N} time={harmState.time} />
+          </section>
+        </div>
 
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* CONTROLS + DASHBOARD                                               */}
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">⚙ Control Panel</h2>
-            <div className="space-y-4">
-              <div>
-                <label className="flex justify-between text-xs mb-1.5">
-                  <span className="text-gray-400">Base Frequency f₁</span>
-                  <span className="text-cyan-400 font-bold">{fmtFixed(omegaToGHz(params.omega1), 2)} GHz</span>
-                </label>
-                <input type="range" min="5" max="100" step="0.5" value={params.omega1}
-                  onChange={e => setParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))} className="w-full" />
-                <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
-                  <span>0.17 GHz</span><span>3.33 GHz</span>
-                </div>
+        {/* ── Energy Accumulation side by side ── */}
+        <div className="grid grid-cols-2 gap-3">
+          <section className="bg-[#0a0a1a] rounded-lg border border-cyan-900/30 p-3">
+            <h3 className="text-[10px] font-bold text-cyan-400 mb-1">
+              🔋 Energy Accumulation — Irrational
+            </h3>
+            <EnergyAccumulation history={irrAccHistory} height={160} />
+            <div className="grid grid-cols-3 gap-1 mt-1 text-[9px]">
+              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
+                <span className="text-gray-500">⟨E_center⟩</span>
+                <span className="text-yellow-400 font-bold ml-1">
+                  {irrAccHistory.length > 0 ? fmtSci(irrAccHistory[irrAccHistory.length - 1].eCenter) : '0.00e+0'}
+                </span>
               </div>
-              <div>
-                <label className="text-xs text-gray-400 mb-2 block">Pumping Mode</label>
-                <div className="flex gap-2">
-                  <button onClick={() => handleModeChange('irrational')}
-                    className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                      params.mode === 'irrational' ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600' : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
-                    }`}>
-                    <div>⚡ Irrational</div><div className="text-[9px] opacity-70 mt-0.5">R = 1.47548…</div>
-                  </button>
-                  <button onClick={() => handleModeChange('harmonic')}
-                    className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                      params.mode === 'harmonic' ? 'bg-purple-900/50 text-purple-300 border-purple-600' : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
-                    }`}>
-                    <div>∿ Harmonic</div><div className="text-[9px] opacity-70 mt-0.5">R = 2.0</div>
-                  </button>
-                </div>
-                <div className="text-[9px] text-gray-600 mt-2 bg-gray-900/50 rounded px-2 py-1">
-                  f₂ = <span className="text-gray-300">{fmtFixed(omegaToGHz(omega2), 2)}</span> GHz
-                  {params.mode === 'irrational'
-                    ? <span className="text-cyan-600 ml-2">• f₂/f₁ = {params.R} (irrational)</span>
-                    : <span className="text-purple-600 ml-2">• f₂/f₁ = 2.0 (rational)</span>}
-                </div>
+              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
+                <span className="text-gray-500">⟨E_edge⟩</span>
+                <span className="text-purple-400 font-bold ml-1">
+                  {irrAccHistory.length > 0 ? fmtSci(irrAccHistory[irrAccHistory.length - 1].eEdge) : '0.00e+0'}
+                </span>
               </div>
-              <div>
-                <label className="flex justify-between text-xs mb-1.5">
-                  <span className="text-gray-400">Dissipation G</span>
-                  <span className="text-orange-400 font-bold">{fmtFixed(params.G, 3)}</span>
-                </label>
-                <input type="range" min="0" max="0.5" step="0.001" value={params.G}
-                  onChange={e => setParams(p => ({ ...p, G: parseFloat(e.target.value) }))} className="w-full" />
-              </div>
-              <div>
-                <label className="flex justify-between text-xs mb-1.5">
-                  <span className="text-gray-400">Pump Amplitude A</span>
-                  <span className="text-green-400 font-bold">{fmtFixed(params.amplitude, 2)}</span>
-                </label>
-                <input type="range" min="0.1" max="3.0" step="0.05" value={params.amplitude}
-                  onChange={e => setParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))} className="w-full" />
-              </div>
-              
-              <div>
-                <label className="text-xs text-gray-400 mb-2 block">Boundary Type</label>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setParams(p => ({ ...p, reflectiveBoundaries: true }))}
-                    className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                      params.reflectiveBoundaries !== false
-                        ? 'bg-yellow-900/50 text-yellow-300 border-yellow-600 shadow-lg shadow-yellow-900/30'
-                        : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
-                    }`}
-                  >
-                    <div>🔄 Reflective</div>
-                    <div className="text-[9px] opacity-70 mt-0.5">Waves bounce back</div>
-                  </button>
-                  <button
-                    onClick={() => setParams(p => ({ ...p, reflectiveBoundaries: false }))}
-                    className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                      params.reflectiveBoundaries === false
-                        ? 'bg-gray-700 text-gray-300 border-gray-500'
-                        : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
-                    }`}
-                  >
-                    <div>📥 Absorbing</div>
-                    <div className="text-[9px] opacity-70 mt-0.5">Waves absorbed</div>
-                  </button>
-                </div>
-                <div className="text-[9px] text-gray-600 mt-2 bg-gray-900/50 rounded px-2 py-1">
-                  {params.reflectiveBoundaries !== false
-                    ? 'Waves reflect from boundaries → interfere at center → energy accumulates'
-                    : 'Waves absorbed by sources → no reflection → no accumulation'}
-                </div>
-              </div>
-              <div className="bg-gray-900/50 rounded-lg p-3 text-[10px] text-gray-500 space-y-1.5 border border-gray-800/30">
-                <div className="text-gray-400 font-bold mb-1">System Parameters</div>
-                <div className="flex justify-between"><span>Nodes N</span><span className="text-gray-300">{params.N}</span></div>
-                <div className="flex justify-between"><span>f₁</span><span className="text-cyan-300">{fmtFixed(omegaToGHz(params.omega1), 2)} GHz</span></div>
-                <div className="flex justify-between"><span>f₂</span><span className="text-purple-300">{fmtFixed(omegaToGHz(omega2), 2)} GHz</span></div>
-                <div className="flex justify-between"><span>Z = √(L/C)</span><span className="text-gray-300">{fmtFixed(Math.sqrt(params.L / params.C), 3)} Ω</span></div>
-                <div className="flex justify-between"><span>λ₁ (wavelength)</span><span className="text-gray-300">{fmtFixed(2 * Math.PI / params.omega1 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes</span></div>
-                <div className="flex justify-between"><span>λ₂ (wavelength)</span><span className="text-gray-300">{fmtFixed(2 * Math.PI / omega2 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes</span></div>
-                <div className="flex justify-between"><span>Sim time</span><span className="text-gray-300">{fmtFixed(state.time, 3)} s</span></div>
+              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
+                <span className="text-gray-500">K</span>
+                <span className={`font-bold ml-1 ${irrGain > 1.5 ? 'text-red-400' : 'text-gray-400'}`}>
+                  {fmtFixed(irrGain, 2)}×
+                </span>
               </div>
             </div>
           </section>
 
-          <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">📊 Analytics</h2>
-            <div className="mb-4">
-              <div className="text-[10px] text-gray-500 mb-1">K<sub>gain</sub> = E<sub>center</sub> / E<sub>edge</sub></div>
-              <span className={`text-5xl font-black tabular-nums ${
-                localizationActive ? 'text-transparent bg-clip-text bg-gradient-to-r from-red-400 to-yellow-400' : 'text-gray-500'
-              }`}>{fmtFixed(gainCoeff, 2)}</span>
-              <span className="text-xs text-gray-600 ml-1">×</span>
-              <div className={`mt-2 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-2 ${
-                localizationActive ? 'bg-gradient-to-r from-red-900/50 to-yellow-900/30 text-yellow-300 border border-yellow-700/50' : 'bg-gray-900/50 text-gray-500 border border-gray-800/50'
-              }`}>
-                {localizationActive
-                  ? <><span className="animate-pulse">⚡</span><span>LOCALIZATION ACTIVE — counter-propagating waves constructively interfere at center</span></>
-                  : <><span>○</span><span>No significant localization</span></>}
+          <section className="bg-[#0a0a1a] rounded-lg border border-purple-900/30 p-3">
+            <h3 className="text-[10px] font-bold text-purple-400 mb-1">
+              🔋 Energy Accumulation — Harmonic
+            </h3>
+            <EnergyAccumulation history={harmAccHistory} height={160} />
+            <div className="grid grid-cols-3 gap-1 mt-1 text-[9px]">
+              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
+                <span className="text-gray-500">⟨E_center⟩</span>
+                <span className="text-yellow-400 font-bold ml-1">
+                  {harmAccHistory.length > 0 ? fmtSci(harmAccHistory[harmAccHistory.length - 1].eCenter) : '0.00e+0'}
+                </span>
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2 mb-4">
-              <div className="bg-gray-900/50 rounded-lg p-2.5 border border-gray-800/30">
-                <div className="text-[9px] text-gray-500">Center Energy</div>
-                <div className="text-base font-bold text-yellow-400 tabular-nums">{fmtSci(centerEnergy)}</div>
+              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
+                <span className="text-gray-500">⟨E_edge⟩</span>
+                <span className="text-purple-400 font-bold ml-1">
+                  {harmAccHistory.length > 0 ? fmtSci(harmAccHistory[harmAccHistory.length - 1].eEdge) : '0.00e+0'}
+                </span>
               </div>
-              <div className="bg-gray-900/50 rounded-lg p-2.5 border border-gray-800/30">
-                <div className="text-[9px] text-gray-500">Max Energy</div>
-                <div className="text-base font-bold text-red-400 tabular-nums">{fmtSci(maxEnergy)}</div>
-              </div>
-              <div className="bg-gray-900/50 rounded-lg p-2.5 border border-gray-800/30">
-                <div className="text-[9px] text-gray-500">Total Energy</div>
-                <div className="text-base font-bold text-cyan-400 tabular-nums">{fmtSci(totalEnergy)}</div>
-              </div>
-              <div className="bg-gray-900/50 rounded-lg p-2.5 border border-gray-800/30">
-                <div className="text-[9px] text-gray-500">Avg Edge Energy</div>
-                <div className="text-base font-bold text-purple-400 tabular-nums">{fmtSci(edgeAvg)}</div>
-              </div>
-            </div>
-            <div>
-              <div className="text-[9px] text-gray-500 mb-1">Max Energy vs Time</div>
-              <div className="bg-gray-900/50 rounded-lg p-2 h-28 relative overflow-hidden border border-gray-800/30">
-                {maxEnergyHistory.length > 2 ? (
-                  <svg className="w-full h-full" viewBox={`0 0 ${maxEnergyHistory.length} 100`} preserveAspectRatio="none">
-                    <defs><linearGradient id="eGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="rgba(239,68,68,0.4)" /><stop offset="100%" stopColor="rgba(239,68,68,0.0)" />
-                    </linearGradient></defs>
-                    <polyline fill="url(#eGrad)" stroke="none" points={historyFillPoints} />
-                    <polyline fill="none" stroke="rgb(239,68,68)" strokeWidth="1.5" points={historySvgPoints} />
-                  </svg>
-                ) : (
-                  <div className="flex items-center justify-center h-full text-gray-600 text-xs">Start simulation</div>
-                )}
-              </div>
-            </div>
-            <div className="mt-3">
-              <div className="text-[9px] text-gray-500 mb-1">Energy Distribution</div>
-              <div className="flex items-end gap-px h-14 bg-gray-900/50 rounded-lg p-1.5 border border-gray-800/30">
-                {Array.from(state.energies).map((e, i) => {
-                  const N = params.N;
-                  const cIdx1 = Math.floor(N / 2) - 1;
-                  const cIdx2 = Math.floor(N / 2);
-                  const energy = Number.isFinite(e) ? e : 0;
-                  const h = (energy / Math.max(maxEnergy, 1e-10)) * 100;
-                  const isCenter = i === cIdx1 || i === cIdx2;
-                  return <div key={i} className="flex-1 rounded-t-sm transition-all duration-100"
-                    style={{ height: `${Math.max(h, 3)}%`, backgroundColor: isCenter ? '#fbbf24' : energyToColor(energy, maxEnergy) }} />;
-                })}
+              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
+                <span className="text-gray-500">K</span>
+                <span className={`font-bold ml-1 ${harmGain > 1.5 ? 'text-red-400' : 'text-gray-400'}`}>
+                  {fmtFixed(harmGain, 2)}×
+                </span>
               </div>
             </div>
           </section>
         </div>
 
-        {/* ── Physics Model ── */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">📐 Physics Model</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-gray-400">
-            <div className="bg-gray-900/30 rounded-lg p-3 border border-gray-800/30">
-              <div className="text-cyan-400 font-bold mb-1.5 text-[11px]">Telegraph Equations</div>
-              <div className="font-mono text-[10px] leading-relaxed text-gray-300">
-                C·dVᵢ/dt = Iᵢ₋₁ − Iᵢ − G·Vᵢ<br/>
-                L·dIᵢ/dt = Vᵢ − Vᵢ₊₁
-              </div>
-              <div className="mt-2 text-[9px] text-gray-600">Coupled V-I system → bidirectional wave propagation</div>
+        {/* ── Energy Profile bars ── */}
+        <div className="grid grid-cols-2 gap-3">
+          <section className="bg-[#0a0a1a] rounded-lg border border-cyan-900/30 p-2">
+            <h3 className="text-[9px] font-bold text-cyan-400 mb-1">Energy Profile — Irrational</h3>
+            <div className="flex items-end gap-px h-16 bg-gray-900/50 rounded p-1 border border-gray-800/30">
+              {Array.from(irrState.energies).map((e, i) => {
+                const N = params.N;
+                const cIdx1 = Math.floor(N / 2) - 1;
+                const cIdx2 = Math.floor(N / 2);
+                const energy = Number.isFinite(e) ? e : 0;
+                const maxE = safeMax(irrState.energies);
+                const h = (energy / Math.max(maxE, 1e-10)) * 100;
+                const isCenter = i === cIdx1 || i === cIdx2;
+                return <div key={i} className="flex-1 rounded-t-sm transition-all duration-100"
+                  style={{ height: `${Math.max(h, 2)}%`, backgroundColor: isCenter ? '#fbbf24' : energyToColor(energy, maxE) }} />;
+              })}
             </div>
-            <div className="bg-gray-900/30 rounded-lg p-3 border border-gray-800/30">
-              <div className="text-purple-400 font-bold mb-1.5 text-[11px]">Counter-Propagating Drive</div>
-              <div className="font-mono text-[10px] leading-relaxed text-gray-300">
-                V₀(t) → launches V⁺ rightward<br/>
-                V<sub>N−1</sub>(t) → launches V⁻ leftward
-              </div>
-              <div className="mt-2 text-[9px] text-gray-600">Anti-phase dual-frequency sources at both ends</div>
+          </section>
+          <section className="bg-[#0a0a1a] rounded-lg border border-purple-900/30 p-2">
+            <h3 className="text-[9px] font-bold text-purple-400 mb-1">Energy Profile — Harmonic</h3>
+            <div className="flex items-end gap-px h-16 bg-gray-900/50 rounded p-1 border border-gray-800/30">
+              {Array.from(harmState.energies).map((e, i) => {
+                const N = params.N;
+                const cIdx1 = Math.floor(N / 2) - 1;
+                const cIdx2 = Math.floor(N / 2);
+                const energy = Number.isFinite(e) ? e : 0;
+                const maxE = safeMax(harmState.energies);
+                const h = (energy / Math.max(maxE, 1e-10)) * 100;
+                const isCenter = i === cIdx1 || i === cIdx2;
+                return <div key={i} className="flex-1 rounded-t-sm transition-all duration-100"
+                  style={{ height: `${Math.max(h, 2)}%`, backgroundColor: isCenter ? '#fbbf24' : energyToColor(energy, maxE) }} />;
+              })}
             </div>
-            <div className="bg-gray-900/30 rounded-lg p-3 border border-gray-800/30">
-              <div className="text-yellow-400 font-bold mb-1.5 text-[11px]">Traveling Wave Decomposition</div>
-              <div className="font-mono text-[10px] leading-relaxed text-gray-300">
-                V⁺ = (V + Z·I) / 2 → rightward<br/>
-                V⁻ = (V − Z·I) / 2 ← leftward
-              </div>
-              <div className="mt-2 text-[9px] text-gray-600">Z = √(L/C) — waves meet at center, irrational ratio → constructive accumulation</div>
-            </div>
-          </div>
-        </section>
+          </section>
+        </div>
+
+        {/* ── Verdict ── */}
+        <div className={`rounded-lg p-3 text-center text-xs font-bold ${
+          irrGain > harmGain * 1.2
+            ? 'bg-gradient-to-r from-cyan-900/30 to-blue-900/30 text-cyan-300 border border-cyan-700/50'
+            : harmGain > irrGain * 1.2
+            ? 'bg-gradient-to-r from-purple-900/30 to-pink-900/30 text-purple-300 border border-purple-700/50'
+            : 'bg-gray-900/50 text-gray-400 border border-gray-700/50'
+        }`}>
+          {irrGain > harmGain * 1.2
+            ? `⚡ IRRATIONAL WINS — K_irr = ${fmtFixed(irrGain, 2)}× vs K_harm = ${fmtFixed(harmGain, 2)}× (${fmtFixed(irrGain / Math.max(harmGain, 0.01), 1)}× better)`
+            : harmGain > irrGain * 1.2
+            ? `∿ HARMONIC WINS — K_harm = ${fmtFixed(harmGain, 2)}× vs K_irr = ${fmtFixed(irrGain, 2)}×`
+            : `○ TIED — K_irr = ${fmtFixed(irrGain, 2)}× vs K_harm = ${fmtFixed(harmGain, 2)}×`
+          }
+        </div>
       </main>
-
-      <footer className="border-t border-gray-800/30 px-6 py-3 mt-4">
-        <div className="max-w-7xl mx-auto text-[10px] text-gray-700 text-center">
-          LC-Chain EM Simulator • Counter-propagating waves • RK4 + NaN-guard • Real-time oscilloscopes
-        </div>
-      </footer>
     </div>
   );
 }
