@@ -1,50 +1,47 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  SimulationParams,
-  SimulationState,
-  DEFAULT_PARAMS,
-  createInitialState,
-  advanceSimulation,
-  getCenterPeak,
-  omegaToGHz,
-} from './simulation';
-import CollisionView from './CollisionView';
-import PeakComparisonChart from './PeakComparisonChart';
+  AcousticParams,
+  AcousticState,
+  DEFAULT_ACOUSTIC_PARAMS,
+  createInitialAcousticState,
+  advanceAcousticSimulation,
+  getCenterPeakPressure,
+  pressureToDb,
+} from './acousticSimulation';
+import AcousticView from './AcousticView';
 
 function fmtSci(v: number): string { return Number.isFinite(v) ? v.toExponential(2) : '0.00e+0'; }
 function fmtFixed(v: number, d = 2): string { return Number.isFinite(v) ? v.toFixed(d) : '—'; }
 
-const SIM_DT = 0.003;
-const SUB_STEPS = 5;
+const SIM_DT = 0.00001; // 10 μs timestep for acoustic simulation
+const SUB_STEPS = 10;
 
 export default function App() {
   // Irrational: R = 1.475482818459
-  const [irrParams, setIrrParams] = useState<SimulationParams>({
-    N: 160,
-    L: 0.01,
-    C: 0.01,
-    G: 0.0,
-    omega1: 31.0,
+  const [irrParams, setIrrParams] = useState<AcousticParams>({
+    N: 200,
+    L: 2.0,
+    f1: 1000.0,
     R: 1.475482818459,
-    amplitude: 5.0,
+    amplitude: 20.0,
     mode: 'irrational',
+    temperature: 293.0,
   });
   
   // Harmonic: R = 2.0
-  const [harmParams, setHarmParams] = useState<SimulationParams>({
-    N: 160,
-    L: 0.01,
-    C: 0.01,
-    G: 0.0,
-    omega1: 31.0,
+  const [harmParams, setHarmParams] = useState<AcousticParams>({
+    N: 200,
+    L: 2.0,
+    f1: 1000.0,
     R: 2.0,
-    amplitude: 5.0,
+    amplitude: 20.0,
     mode: 'harmonic',
+    temperature: 293.0,
   });
 
   const [isRunning, setIsRunning] = useState(false);
-  const [irrState, setIrrState] = useState<SimulationState>(() => createInitialState(irrParams));
-  const [harmState, setHarmState] = useState<SimulationState>(() => createInitialState(harmParams));
+  const [irrState, setIrrState] = useState<AcousticState>(() => createInitialAcousticState(irrParams));
+  const [harmState, setHarmState] = useState<AcousticState>(() => createInitialAcousticState(harmParams));
   
   const [irrPeakHistory, setIrrPeakHistory] = useState<{ t: number; peak: number }[]>([]);
   const [harmPeakHistory, setHarmPeakHistory] = useState<{ t: number; peak: number }[]>([]);
@@ -81,8 +78,8 @@ export default function App() {
     const maxStepsPerFrame = 50;
 
     while (accumulatorRef.current >= SIM_DT && stepsThisFrame < maxStepsPerFrame) {
-      irrCurrent = advanceSimulation(irrCurrent, SIM_DT, irrParamsRef.current, SUB_STEPS);
-      harmCurrent = advanceSimulation(harmCurrent, SIM_DT, harmParamsRef.current, SUB_STEPS);
+      irrCurrent = advanceAcousticSimulation(irrCurrent, SIM_DT, irrParamsRef.current);
+      harmCurrent = advanceAcousticSimulation(harmCurrent, SIM_DT, harmParamsRef.current);
       accumulatorRef.current -= SIM_DT;
       stepsThisFrame++;
     }
@@ -95,8 +92,8 @@ export default function App() {
 
       frameTickRef.current++;
       if (frameTickRef.current % 5 === 0) {
-        const irrPeak = getCenterPeak(irrCurrent);
-        const harmPeak = getCenterPeak(harmCurrent);
+        const irrPeak = getCenterPeakPressure(irrCurrent);
+        const harmPeak = getCenterPeakPressure(harmCurrent);
 
         setIrrPeakHistory(hist => {
           const next = [...hist, { t: irrCurrent.time, peak: irrPeak }];
@@ -130,12 +127,12 @@ export default function App() {
 
   const handleReset = () => {
     setIsRunning(false);
-    const resetIrr = { ...irrParams, N: 160, G: 0.0, omega1: 31.0, amplitude: 5.0 };
-    const resetHarm = { ...harmParams, N: 160, G: 0.0, omega1: 31.0, amplitude: 5.0 };
+    const resetIrr = { ...irrParams, f1: 1000.0, amplitude: 20.0, temperature: 293.0 };
+    const resetHarm = { ...harmParams, f1: 1000.0, amplitude: 20.0, temperature: 293.0 };
     setIrrParams(resetIrr);
     setHarmParams(resetHarm);
-    const irrNew = createInitialState(resetIrr);
-    const harmNew = createInitialState(resetHarm);
+    const irrNew = createInitialAcousticState(resetIrr);
+    const harmNew = createInitialAcousticState(resetHarm);
     setIrrState(irrNew);
     setHarmState(harmNew);
     setIrrPeakHistory([]);
@@ -148,8 +145,8 @@ export default function App() {
     accumulatorRef.current = 0;
   };
 
-  const irrOmega2 = irrParams.R * irrParams.omega1;
-  const harmOmega2 = harmParams.R * harmParams.omega1;
+  const irrF2 = irrParams.R * irrParams.f1;
+  const harmF2 = harmParams.R * harmParams.f1;
 
   return (
     <div className="min-h-screen bg-[#050510] text-white font-mono overflow-hidden">
@@ -157,10 +154,10 @@ export default function App() {
         <div className="max-w-[1920px] mx-auto flex items-center justify-between flex-wrap gap-2">
           <div>
             <h1 className="text-base font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
-              ⚡ Two Speakers Facing Each Other — Irrational vs Harmonic
+              🔊 Acoustic Wave Simulation — Real Physics
             </h1>
             <p className="text-[9px] text-gray-500 mt-0.5">
-              Left speaker emits f₁+f₂ → ← f₁+f₂ Right speaker | Waves collide at center
+              Sound waves in air at 20°C | c = 343 m/s | ρ = 1.225 kg/m³ | Two speakers facing each other
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -184,57 +181,54 @@ export default function App() {
             <div className="text-[10px] text-cyan-400 font-bold mb-2">IRRATIONAL — Base Frequency f₁</div>
             <div className="flex items-center gap-2">
               <input
-                type="range" min="10" max="100" step="0.5"
-                value={irrParams.omega1}
-                onChange={(e) => setIrrParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
+                type="range" min="100" max="5000" step="50"
+                value={irrParams.f1}
+                onChange={(e) => setIrrParams(p => ({ ...p, f1: parseFloat(e.target.value) }))}
                 className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
               />
-              <span className="text-[10px] text-cyan-300 font-mono w-20">{fmtFixed(omegaToGHz(irrParams.omega1), 2)} GHz</span>
+              <span className="text-[10px] text-cyan-300 font-mono w-20">{fmtFixed(irrParams.f1, 0)} Hz</span>
             </div>
             <div className="text-[9px] text-gray-500 mt-1">
-              f₁ = {fmtFixed(omegaToGHz(irrParams.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(irrOmega2), 2)} GHz | R = {irrParams.R.toFixed(4)}
+              f₁ = {fmtFixed(irrParams.f1, 0)} Hz | f₂ = {fmtFixed(irrF2, 0)} Hz | R = {irrParams.R.toFixed(4)}
             </div>
             <div className="text-[9px] text-cyan-600 mt-1">
-              Resonance: ω₁=31 (k=4), ω₁=47 (k=6) | N={irrParams.N} nodes
+              λ₁ = {fmtFixed(343 / irrParams.f1, 3)} m | λ₂ = {fmtFixed(343 / irrF2, 3)} m
             </div>
             
-            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">NODES (N)</div>
+            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">AMPLITUDE (Sound Pressure)</div>
             <div className="flex items-center gap-2">
               <input
-                type="range" min="40" max="320" step="40"
-                value={irrParams.N}
-                onChange={(e) => setIrrParams(p => ({ ...p, N: parseInt(e.target.value) }))}
-                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-              />
-              <span className="text-[10px] text-cyan-300 font-mono w-16">N = {irrParams.N}</span>
-            </div>
-            
-            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">DISSIPATION (G)</div>
-            <div className="flex items-center gap-2">
-              <input
-                type="range" min="0" max="0.01" step="0.0001"
-                value={irrParams.G}
-                onChange={(e) => setIrrParams(p => ({ ...p, G: parseFloat(e.target.value) }))}
-                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-              />
-              <span className="text-[10px] text-cyan-300 font-mono w-16">G = {fmtFixed(irrParams.G, 4)}</span>
-            </div>
-            <div className="text-[9px] text-gray-500 mt-1">
-              Set G=0 for maximum energy accumulation
-            </div>
-            
-            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">AMPLITUDE (Power)</div>
-            <div className="flex items-center gap-2">
-              <input
-                type="range" min="0.1" max="5.0" step="0.1"
+                type="range" min="0.02" max="200" step="0.1"
                 value={irrParams.amplitude}
                 onChange={(e) => setIrrParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))}
                 className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
               />
-              <span className="text-[10px] text-cyan-300 font-mono w-16">A = {fmtFixed(irrParams.amplitude, 1)}</span>
+              <span className="text-[10px] text-cyan-300 font-mono w-20">{fmtFixed(irrParams.amplitude, 1)} Pa</span>
             </div>
             <div className="text-[9px] text-gray-500 mt-1">
-              Increase amplitude to drive stronger waves toward center collapse
+              {fmtFixed(pressureToDb(irrParams.amplitude), 1)} dB SPL | Threshold of pain: 120 dB (20 Pa)
+            </div>
+            
+            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">DISTANCE (L)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="0.5" max="5.0" step="0.1"
+                value={irrParams.L}
+                onChange={(e) => setIrrParams(p => ({ ...p, L: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-cyan-300 font-mono w-16">L = {fmtFixed(irrParams.L, 1)} m</span>
+            </div>
+            
+            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">TEMPERATURE</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="253" max="323" step="1"
+                value={irrParams.temperature}
+                onChange={(e) => setIrrParams(p => ({ ...p, temperature: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-cyan-300 font-mono w-20">{fmtFixed(irrParams.temperature - 273, 0)}°C</span>
             </div>
           </div>
           
@@ -242,83 +236,80 @@ export default function App() {
             <div className="text-[10px] text-purple-400 font-bold mb-2">HARMONIC — Base Frequency f₁</div>
             <div className="flex items-center gap-2">
               <input
-                type="range" min="10" max="100" step="0.5"
-                value={harmParams.omega1}
-                onChange={(e) => setHarmParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
+                type="range" min="100" max="5000" step="50"
+                value={harmParams.f1}
+                onChange={(e) => setHarmParams(p => ({ ...p, f1: parseFloat(e.target.value) }))}
                 className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
               />
-              <span className="text-[10px] text-purple-300 font-mono w-20">{fmtFixed(omegaToGHz(harmParams.omega1), 2)} GHz</span>
+              <span className="text-[10px] text-purple-300 font-mono w-20">{fmtFixed(harmParams.f1, 0)} Hz</span>
             </div>
             <div className="text-[9px] text-gray-500 mt-1">
-              f₁ = {fmtFixed(omegaToGHz(harmParams.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(harmOmega2), 2)} GHz | R = 2.0
+              f₁ = {fmtFixed(harmParams.f1, 0)} Hz | f₂ = {fmtFixed(harmF2, 0)} Hz | R = 2.0
             </div>
             <div className="text-[9px] text-purple-600 mt-1">
-              Resonance: ω₁=31 (k=4), ω₁=47 (k=6) | N={harmParams.N} nodes
+              λ₁ = {fmtFixed(343 / harmParams.f1, 3)} m | λ₂ = {fmtFixed(343 / harmF2, 3)} m
             </div>
             
-            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">NODES (N)</div>
+            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">AMPLITUDE (Sound Pressure)</div>
             <div className="flex items-center gap-2">
               <input
-                type="range" min="40" max="320" step="40"
-                value={harmParams.N}
-                onChange={(e) => setHarmParams(p => ({ ...p, N: parseInt(e.target.value) }))}
-                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-              />
-              <span className="text-[10px] text-purple-300 font-mono w-16">N = {harmParams.N}</span>
-            </div>
-            
-            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">DISSIPATION (G)</div>
-            <div className="flex items-center gap-2">
-              <input
-                type="range" min="0" max="0.01" step="0.0001"
-                value={harmParams.G}
-                onChange={(e) => setHarmParams(p => ({ ...p, G: parseFloat(e.target.value) }))}
-                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-              />
-              <span className="text-[10px] text-purple-300 font-mono w-16">G = {fmtFixed(harmParams.G, 4)}</span>
-            </div>
-            <div className="text-[9px] text-gray-500 mt-1">
-              Set G=0 for maximum energy accumulation
-            </div>
-            
-            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">AMPLITUDE (Power)</div>
-            <div className="flex items-center gap-2">
-              <input
-                type="range" min="0.1" max="5.0" step="0.1"
+                type="range" min="0.02" max="200" step="0.1"
                 value={harmParams.amplitude}
                 onChange={(e) => setHarmParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))}
                 className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
               />
-              <span className="text-[10px] text-purple-300 font-mono w-16">A = {fmtFixed(harmParams.amplitude, 1)}</span>
+              <span className="text-[10px] text-purple-300 font-mono w-20">{fmtFixed(harmParams.amplitude, 1)} Pa</span>
             </div>
             <div className="text-[9px] text-gray-500 mt-1">
-              Increase amplitude to drive stronger waves toward center collapse
+              {fmtFixed(pressureToDb(harmParams.amplitude), 1)} dB SPL | Threshold of pain: 120 dB (20 Pa)
+            </div>
+            
+            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">DISTANCE (L)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="0.5" max="5.0" step="0.1"
+                value={harmParams.L}
+                onChange={(e) => setHarmParams(p => ({ ...p, L: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-purple-300 font-mono w-16">L = {fmtFixed(harmParams.L, 1)} m</span>
+            </div>
+            
+            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">TEMPERATURE</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="253" max="323" step="1"
+                value={harmParams.temperature}
+                onChange={(e) => setHarmParams(p => ({ ...p, temperature: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-purple-300 font-mono w-20">{fmtFixed(harmParams.temperature - 273, 0)}°C</span>
             </div>
           </div>
         </div>
 
-        {/* Collision Views */}
+        {/* Acoustic Views */}
         <div className="grid grid-cols-2 gap-3">
           <section className="bg-[#0a0a1a] rounded-lg border-2 border-cyan-900/50 p-3">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-xs font-bold text-cyan-400">⚡ IRRATIONAL — R = {irrParams.R.toFixed(4)}</h2>
-              <div className="text-[10px] text-gray-500">Peak: {fmtSci(irrMaxPeak)}</div>
+              <div className="text-[10px] text-gray-500">Peak: {fmtFixed(pressureToDb(irrMaxPeak), 1)} dB</div>
             </div>
             <div className="text-[9px] text-gray-500 mb-1">
-              Left speaker: f₁+f₂ → ← f₁+f₂ Right speaker
+              Speaker 1: f₁+f₂ → ← f₁+f₂ Speaker 2 | Distance: {fmtFixed(irrParams.L, 1)} m
             </div>
-            <CollisionView vRight={irrState.vRight} vLeft={irrState.vLeft} N={irrParams.N} time={irrState.time} />
+            <AcousticView state={irrState} params={irrParams} />
           </section>
 
           <section className="bg-[#0a0a1a] rounded-lg border-2 border-purple-900/50 p-3">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-xs font-bold text-purple-400">∿ HARMONIC — R = 2.0</h2>
-              <div className="text-[10px] text-gray-500">Peak: {fmtSci(harmMaxPeak)}</div>
+              <div className="text-[10px] text-gray-500">Peak: {fmtFixed(pressureToDb(harmMaxPeak), 1)} dB</div>
             </div>
             <div className="text-[9px] text-gray-500 mb-1">
-              Left speaker: f₁+f₂ → ← f₁+f₂ Right speaker
+              Speaker 1: f₁+f₂ → ← f₁+f₂ Speaker 2 | Distance: {fmtFixed(harmParams.L, 1)} m
             </div>
-            <CollisionView vRight={harmState.vRight} vLeft={harmState.vLeft} N={harmParams.N} time={harmState.time} />
+            <AcousticView state={harmState} params={harmParams} />
           </section>
         </div>
 
@@ -380,15 +371,27 @@ export default function App() {
           </div>
         </section>
 
-        {/* Combined Peak Comparison Chart */}
-        <section className="bg-[#0a0a1a] rounded-lg border-2 border-gray-700/50 p-3">
-          <h2 className="text-sm font-bold text-gray-300 mb-2">📈 Combined Peak Comparison</h2>
-          <PeakComparisonChart
-            irrHistory={irrPeakHistory}
-            harmHistory={harmPeakHistory}
-            irrMax={irrMaxPeak}
-            harmMax={harmMaxPeak}
-          />
+        {/* Physical Constants */}
+        <section className="bg-[#0a0a1a] rounded-lg border border-gray-800/50 p-3">
+          <h2 className="text-xs font-bold text-gray-400 mb-2">📐 Physical Constants (Air at 20°C)</h2>
+          <div className="grid grid-cols-4 gap-2 text-[9px]">
+            <div className="bg-gray-900/50 rounded p-2">
+              <div className="text-gray-500">Speed of Sound</div>
+              <div className="text-cyan-400 font-bold">343 m/s</div>
+            </div>
+            <div className="bg-gray-900/50 rounded p-2">
+              <div className="text-gray-500">Air Density</div>
+              <div className="text-cyan-400 font-bold">1.225 kg/m³</div>
+            </div>
+            <div className="bg-gray-900/50 rounded p-2">
+              <div className="text-gray-500">Atmospheric Pressure</div>
+              <div className="text-cyan-400 font-bold">101325 Pa</div>
+            </div>
+            <div className="bg-gray-900/50 rounded p-2">
+              <div className="text-gray-500">Temperature</div>
+              <div className="text-cyan-400 font-bold">293 K (20°C)</div>
+            </div>
+          </div>
         </section>
       </main>
     </div>
