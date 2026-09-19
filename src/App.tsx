@@ -7,11 +7,10 @@ import {
   advanceSimulation,
   computeGainCoefficient,
   safeMax,
-  safeSum,
   omegaToGHz,
 } from './simulation';
 import CollisionView from './CollisionView';
-import EnergyAccumulation from './EnergyAccumulation';
+import PeakComparison from './PeakComparison';
 
 // ─── Color mapping ───────────────────────────────────────────────────────────
 
@@ -52,11 +51,11 @@ export default function App() {
   const [irrGain, setIrrGain] = useState(1.0);
   const [harmGain, setHarmGain] = useState(1.0);
 
-  // Energy accumulation histories
-  const [irrAccHistory, setIrrAccHistory] = useState<{ t: number; eCenter: number; eEdge: number }[]>([]);
-  const [harmAccHistory, setHarmAccHistory] = useState<{ t: number; eCenter: number; eEdge: number }[]>([]);
-  const irrAccRef = useRef({ center: 0, edge: 0 });
-  const harmAccRef = useRef({ center: 0, edge: 0 });
+  // Peak tracking histories
+  const [irrPeakHistory, setIrrPeakHistory] = useState<{ t: number; peak: number }[]>([]);
+  const [harmPeakHistory, setHarmPeakHistory] = useState<{ t: number; peak: number }[]>([]);
+  const [irrMaxPeak, setIrrMaxPeak] = useState(0);
+  const [harmMaxPeak, setHarmMaxPeak] = useState(0);
 
   const irrStateRef = useRef(irrState);
   const harmStateRef = useRef(harmState);
@@ -72,21 +71,14 @@ export default function App() {
   useEffect(() => { paramsRef.current = params; }, [params]);
   useEffect(() => { runningRef.current = isRunning; }, [isRunning]);
 
-  // Compute energy metrics for a state
-  const computeEnergyMetrics = (state: SimulationState, N: number) => {
+  // Get center peak energy for a state
+  const getCenterPeak = (state: SimulationState, N: number): number => {
     const cIdx1 = Math.floor(N / 2) - 1;
     const cIdx2 = Math.floor(N / 2);
-    const eCenter = (Number.isFinite(state.energies[cIdx1]) ? state.energies[cIdx1] : 0)
-                  + (Number.isFinite(state.energies[cIdx2]) ? state.energies[cIdx2] : 0);
-    const eEdge = (Number.isFinite(state.energies[0]) ? state.energies[0] : 0)
-                + (Number.isFinite(state.energies[1]) ? state.energies[1] : 0)
-                + (Number.isFinite(state.energies[2]) ? state.energies[2] : 0)
-                + (Number.isFinite(state.energies[3]) ? state.energies[3] : 0)
-                + (Number.isFinite(state.energies[N - 4]) ? state.energies[N - 4] : 0)
-                + (Number.isFinite(state.energies[N - 3]) ? state.energies[N - 3] : 0)
-                + (Number.isFinite(state.energies[N - 2]) ? state.energies[N - 2] : 0)
-                + (Number.isFinite(state.energies[N - 1]) ? state.energies[N - 1] : 0);
-    return { eCenter, eEdge };
+    return Math.max(
+      Number.isFinite(state.energies[cIdx1]) ? state.energies[cIdx1] : 0,
+      Number.isFinite(state.energies[cIdx2]) ? state.energies[cIdx2] : 0
+    );
   };
 
   const simulationLoop = useCallback(() => {
@@ -103,19 +95,10 @@ export default function App() {
     const maxStepsPerFrame = 50;
 
     while (accumulatorRef.current >= SIM_DT && stepsThisFrame < maxStepsPerFrame) {
-      // Advance both simulations
       irrCurrent = advanceSimulation(irrCurrent, SIM_DT, { ...paramsRef.current, mode: 'irrational' }, SUB_STEPS);
       harmCurrent = advanceSimulation(harmCurrent, SIM_DT, { ...paramsRef.current, mode: 'harmonic' }, SUB_STEPS);
       accumulatorRef.current -= SIM_DT;
       stepsThisFrame++;
-
-      // Accumulate energy
-      const irrE = computeEnergyMetrics(irrCurrent, paramsRef.current.N);
-      const harmE = computeEnergyMetrics(harmCurrent, paramsRef.current.N);
-      irrAccRef.current.center += irrE.eCenter * SIM_DT;
-      irrAccRef.current.edge += irrE.eEdge * SIM_DT;
-      harmAccRef.current.center += harmE.eCenter * SIM_DT;
-      harmAccRef.current.edge += harmE.eEdge * SIM_DT;
     }
 
     if (stepsThisFrame > 0) {
@@ -130,16 +113,22 @@ export default function App() {
 
       frameTickRef.current++;
       if (frameTickRef.current % 5 === 0) {
-        setIrrAccHistory(hist => {
-          const next = [...hist, { t: irrCurrent.time, eCenter: irrAccRef.current.center, eEdge: irrAccRef.current.edge }];
+        const irrPeak = getCenterPeak(irrCurrent, paramsRef.current.N);
+        const harmPeak = getCenterPeak(harmCurrent, paramsRef.current.N);
+
+        setIrrPeakHistory(hist => {
+          const next = [...hist, { t: irrCurrent.time, peak: irrPeak }];
           if (next.length > 500) next.shift();
           return next;
         });
-        setHarmAccHistory(hist => {
-          const next = [...hist, { t: harmCurrent.time, eCenter: harmAccRef.current.center, eEdge: harmAccRef.current.edge }];
+        setHarmPeakHistory(hist => {
+          const next = [...hist, { t: harmCurrent.time, peak: harmPeak }];
           if (next.length > 500) next.shift();
           return next;
         });
+
+        setIrrMaxPeak(prev => Math.max(prev, irrPeak));
+        setHarmMaxPeak(prev => Math.max(prev, harmPeak));
       }
     }
 
@@ -165,10 +154,10 @@ export default function App() {
     setHarmState(harmNew);
     setIrrGain(1.0);
     setHarmGain(1.0);
-    setIrrAccHistory([]);
-    setHarmAccHistory([]);
-    irrAccRef.current = { center: 0, edge: 0 };
-    harmAccRef.current = { center: 0, edge: 0 };
+    setIrrPeakHistory([]);
+    setHarmPeakHistory([]);
+    setIrrMaxPeak(0);
+    setHarmMaxPeak(0);
     frameTickRef.current = 0;
     irrStateRef.current = irrNew;
     harmStateRef.current = harmNew;
@@ -184,7 +173,7 @@ export default function App() {
         <div className="max-w-[1920px] mx-auto flex items-center justify-between flex-wrap gap-2">
           <div>
             <h1 className="text-base font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
-              ⚡ LC-Chain: Irrational vs Harmonic — Head-to-Head Comparison
+              ⚡ LC-Chain: Irrational vs Harmonic — Peak Comparison
             </h1>
             <p className="text-[9px] text-gray-500 mt-0.5">
               f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz | N = {params.N} nodes | Reflective boundaries
@@ -276,62 +265,64 @@ export default function App() {
           </section>
         </div>
 
-        {/* ── Energy Accumulation side by side ── */}
-        <div className="grid grid-cols-2 gap-3">
-          <section className="bg-[#0a0a1a] rounded-lg border border-cyan-900/30 p-3">
-            <h3 className="text-[10px] font-bold text-cyan-400 mb-1">
-              🔋 Energy Accumulation — Irrational
-            </h3>
-            <EnergyAccumulation history={irrAccHistory} height={160} />
-            <div className="grid grid-cols-3 gap-1 mt-1 text-[9px]">
-              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
-                <span className="text-gray-500">⟨E_center⟩</span>
-                <span className="text-yellow-400 font-bold ml-1">
-                  {irrAccHistory.length > 0 ? fmtSci(irrAccHistory[irrAccHistory.length - 1].eCenter) : '0.00e+0'}
-                </span>
-              </div>
-              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
-                <span className="text-gray-500">⟨E_edge⟩</span>
-                <span className="text-purple-400 font-bold ml-1">
-                  {irrAccHistory.length > 0 ? fmtSci(irrAccHistory[irrAccHistory.length - 1].eEdge) : '0.00e+0'}
-                </span>
-              </div>
-              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
-                <span className="text-gray-500">K</span>
-                <span className={`font-bold ml-1 ${irrGain > 1.5 ? 'text-red-400' : 'text-gray-400'}`}>
-                  {fmtFixed(irrGain, 2)}×
-                </span>
-              </div>
+        {/* ── Peak Comparison ── */}
+        <section className="bg-[#0a0a1a] rounded-lg border-2 border-yellow-900/50 p-3 shadow-2xl shadow-yellow-900/20">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-bold text-yellow-400">
+              📊 Center Peak Comparison — Who Creates Higher Peaks?
+            </h2>
+            {(() => {
+              const ratio = harmMaxPeak > 1e-15 ? irrMaxPeak / harmMaxPeak : 1;
+              const irrWins = ratio > 1.2;
+              const harmWins = ratio < 0.8;
+              return (
+                <div className={`px-3 py-1.5 rounded-lg text-xs font-bold ${
+                  irrWins ? 'bg-cyan-900/50 text-cyan-300 border border-cyan-700' :
+                  harmWins ? 'bg-purple-900/50 text-purple-300 border border-purple-700' :
+                  'bg-gray-800 text-gray-400 border border-gray-700'
+                }`}>
+                  {irrWins ? `⚡ IRRATIONAL WINS — ${fmtFixed(ratio, 2)}× higher` :
+                   harmWins ? `∿ HARMONIC WINS — ${fmtFixed(1/ratio, 2)}× higher` :
+                   `○ TIED — ${fmtFixed(ratio, 2)}×`}
+                </div>
+              );
+            })()}
+          </div>
+          <p className="text-[10px] text-gray-500 mb-2">
+            <span className="text-cyan-400 font-bold">Cyan</span> = max peak energy at center (irrational) &nbsp;|&nbsp;
+            <span className="text-purple-400 font-bold">Purple</span> = max peak energy at center (harmonic)<br/>
+            Higher curve = stronger energy concentration at center nodes
+          </p>
+          <PeakComparison
+            irrHistory={irrPeakHistory}
+            harmHistory={harmPeakHistory}
+            irrMax={irrMaxPeak}
+            harmMax={harmMaxPeak}
+            height={200}
+          />
+          <div className="grid grid-cols-4 gap-2 mt-2 text-[10px]">
+            <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
+              <span className="text-gray-500">Irr Peak (current)</span>
+              <span className="text-cyan-400 font-bold ml-1">
+                {irrPeakHistory.length > 0 ? fmtSci(irrPeakHistory[irrPeakHistory.length - 1].peak) : '0.00e+0'}
+              </span>
             </div>
-          </section>
-
-          <section className="bg-[#0a0a1a] rounded-lg border border-purple-900/30 p-3">
-            <h3 className="text-[10px] font-bold text-purple-400 mb-1">
-              🔋 Energy Accumulation — Harmonic
-            </h3>
-            <EnergyAccumulation history={harmAccHistory} height={160} />
-            <div className="grid grid-cols-3 gap-1 mt-1 text-[9px]">
-              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
-                <span className="text-gray-500">⟨E_center⟩</span>
-                <span className="text-yellow-400 font-bold ml-1">
-                  {harmAccHistory.length > 0 ? fmtSci(harmAccHistory[harmAccHistory.length - 1].eCenter) : '0.00e+0'}
-                </span>
-              </div>
-              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
-                <span className="text-gray-500">⟨E_edge⟩</span>
-                <span className="text-purple-400 font-bold ml-1">
-                  {harmAccHistory.length > 0 ? fmtSci(harmAccHistory[harmAccHistory.length - 1].eEdge) : '0.00e+0'}
-                </span>
-              </div>
-              <div className="bg-gray-900/50 rounded p-1.5 border border-gray-800/30">
-                <span className="text-gray-500">K</span>
-                <span className={`font-bold ml-1 ${harmGain > 1.5 ? 'text-red-400' : 'text-gray-400'}`}>
-                  {fmtFixed(harmGain, 2)}×
-                </span>
-              </div>
+            <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
+              <span className="text-gray-500">Irr Peak (max)</span>
+              <span className="text-cyan-400 font-bold ml-1">{fmtSci(irrMaxPeak)}</span>
             </div>
-          </section>
-        </div>
+            <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30">
+              <span className="text-gray-500">Harm Peak (current)</span>
+              <span className="text-purple-400 font-bold ml-1">
+                {harmPeakHistory.length > 0 ? fmtSci(harmPeakHistory[harmPeakHistory.length - 1].peak) : '0.00e+0'}
+              </span>
+            </div>
+            <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30">
+              <span className="text-gray-500">Harm Peak (max)</span>
+              <span className="text-purple-400 font-bold ml-1">{fmtSci(harmMaxPeak)}</span>
+            </div>
+          </div>
+        </section>
 
         {/* ── Energy Profile bars ── */}
         <div className="grid grid-cols-2 gap-3">
@@ -367,22 +358,6 @@ export default function App() {
               })}
             </div>
           </section>
-        </div>
-
-        {/* ── Verdict ── */}
-        <div className={`rounded-lg p-3 text-center text-xs font-bold ${
-          irrGain > harmGain * 1.2
-            ? 'bg-gradient-to-r from-cyan-900/30 to-blue-900/30 text-cyan-300 border border-cyan-700/50'
-            : harmGain > irrGain * 1.2
-            ? 'bg-gradient-to-r from-purple-900/30 to-pink-900/30 text-purple-300 border border-purple-700/50'
-            : 'bg-gray-900/50 text-gray-400 border border-gray-700/50'
-        }`}>
-          {irrGain > harmGain * 1.2
-            ? `⚡ IRRATIONAL WINS — K_irr = ${fmtFixed(irrGain, 2)}× vs K_harm = ${fmtFixed(harmGain, 2)}× (${fmtFixed(irrGain / Math.max(harmGain, 0.01), 1)}× better)`
-            : harmGain > irrGain * 1.2
-            ? `∿ HARMONIC WINS — K_harm = ${fmtFixed(harmGain, 2)}× vs K_irr = ${fmtFixed(irrGain, 2)}×`
-            : `○ TIED — K_irr = ${fmtFixed(irrGain, 2)}× vs K_harm = ${fmtFixed(harmGain, 2)}×`
-          }
         </div>
       </main>
     </div>
