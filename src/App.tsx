@@ -37,15 +37,32 @@ const SUB_STEPS = 5;
 // ─── Main App ────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [params, setParams] = useState<SimulationParams>({ ...DEFAULT_PARAMS });
+  // Separate params for each simulation
+  const [irrParams, setIrrParams] = useState<SimulationParams>({
+    ...DEFAULT_PARAMS,
+    mode: 'irrational',
+    leftFreq1Enabled: true,
+    leftFreq2Enabled: true,
+    rightFreq1Enabled: true,
+    rightFreq2Enabled: true,
+  });
+  const [harmParams, setHarmParams] = useState<SimulationParams>({
+    ...DEFAULT_PARAMS,
+    mode: 'harmonic',
+    leftFreq1Enabled: true,
+    leftFreq2Enabled: true,
+    rightFreq1Enabled: true,
+    rightFreq2Enabled: true,
+  });
+
   const [isRunning, setIsRunning] = useState(false);
 
   // Two parallel simulations
   const [irrState, setIrrState] = useState<SimulationState>(() =>
-    createInitialState({ ...DEFAULT_PARAMS, mode: 'irrational' })
+    createInitialState(irrParams)
   );
   const [harmState, setHarmState] = useState<SimulationState>(() =>
-    createInitialState({ ...DEFAULT_PARAMS, mode: 'harmonic' })
+    createInitialState(harmParams)
   );
 
   const [irrGain, setIrrGain] = useState(1.0);
@@ -59,7 +76,8 @@ export default function App() {
 
   const irrStateRef = useRef(irrState);
   const harmStateRef = useRef(harmState);
-  const paramsRef = useRef(params);
+  const irrParamsRef = useRef(irrParams);
+  const harmParamsRef = useRef(harmParams);
   const animFrameRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
   const runningRef = useRef(isRunning);
@@ -68,7 +86,8 @@ export default function App() {
 
   useEffect(() => { irrStateRef.current = irrState; }, [irrState]);
   useEffect(() => { harmStateRef.current = harmState; }, [harmState]);
-  useEffect(() => { paramsRef.current = params; }, [params]);
+  useEffect(() => { irrParamsRef.current = irrParams; }, [irrParams]);
+  useEffect(() => { harmParamsRef.current = harmParams; }, [harmParams]);
   useEffect(() => { runningRef.current = isRunning; }, [isRunning]);
 
   // Get center peak energy for a state
@@ -95,15 +114,15 @@ export default function App() {
     const maxStepsPerFrame = 50;
 
     while (accumulatorRef.current >= SIM_DT && stepsThisFrame < maxStepsPerFrame) {
-      irrCurrent = advanceSimulation(irrCurrent, SIM_DT, { ...paramsRef.current, mode: 'irrational' }, SUB_STEPS);
-      harmCurrent = advanceSimulation(harmCurrent, SIM_DT, { ...paramsRef.current, mode: 'harmonic' }, SUB_STEPS);
+      irrCurrent = advanceSimulation(irrCurrent, SIM_DT, irrParamsRef.current, SUB_STEPS);
+      harmCurrent = advanceSimulation(harmCurrent, SIM_DT, harmParamsRef.current, SUB_STEPS);
       accumulatorRef.current -= SIM_DT;
       stepsThisFrame++;
     }
 
     if (stepsThisFrame > 0) {
-      const irrG = computeGainCoefficient(irrCurrent.energies, paramsRef.current.N);
-      const harmG = computeGainCoefficient(harmCurrent.energies, paramsRef.current.N);
+      const irrG = computeGainCoefficient(irrCurrent.energies, irrParamsRef.current.N);
+      const harmG = computeGainCoefficient(harmCurrent.energies, harmParamsRef.current.N);
       setIrrState(irrCurrent);
       setHarmState(harmCurrent);
       setIrrGain(Number.isFinite(irrG) ? irrG : 1.0);
@@ -113,8 +132,8 @@ export default function App() {
 
       frameTickRef.current++;
       if (frameTickRef.current % 5 === 0) {
-        const irrPeak = getCenterPeak(irrCurrent, paramsRef.current.N);
-        const harmPeak = getCenterPeak(harmCurrent, paramsRef.current.N);
+        const irrPeak = getCenterPeak(irrCurrent, irrParamsRef.current.N);
+        const harmPeak = getCenterPeak(harmCurrent, harmParamsRef.current.N);
 
         setIrrPeakHistory(hist => {
           const next = [...hist, { t: irrCurrent.time, peak: irrPeak }];
@@ -148,17 +167,14 @@ export default function App() {
 
   const handleReset = () => {
     setIsRunning(false);
-    // Reset with all frequencies enabled
-    const resetParams = {
-      ...params,
-      leftFreq1Enabled: true,
-      leftFreq2Enabled: true,
-      rightFreq1Enabled: true,
-      rightFreq2Enabled: true,
-    };
-    setParams(resetParams);
-    const irrNew = createInitialState({ ...resetParams, mode: 'irrational' });
-    const harmNew = createInitialState({ ...resetParams, mode: 'harmonic' });
+    // Reset both simulations with all frequencies enabled
+    const resetIrr = { ...irrParams, leftFreq1Enabled: true, leftFreq2Enabled: true, rightFreq1Enabled: true, rightFreq2Enabled: true };
+    const resetHarm = { ...harmParams, leftFreq1Enabled: true, leftFreq2Enabled: true, rightFreq1Enabled: true, rightFreq2Enabled: true };
+    setIrrParams(resetIrr);
+    setHarmParams(resetHarm);
+    
+    const irrNew = createInitialState(resetIrr);
+    const harmNew = createInitialState(resetHarm);
     setIrrState(irrNew);
     setHarmState(harmNew);
     setIrrGain(1.0);
@@ -173,7 +189,8 @@ export default function App() {
     accumulatorRef.current = 0;
   };
 
-  const omega2 = params.R * params.omega1;
+  const irrOmega2 = irrParams.R * irrParams.omega1;
+  const harmOmega2 = harmParams.R * harmParams.omega1;
 
   return (
     <div className="min-h-screen bg-[#050510] text-white font-mono overflow-hidden">
@@ -185,7 +202,7 @@ export default function App() {
               ⚡ LC-Chain: Irrational vs Harmonic — Peak Comparison
             </h1>
             <p className="text-[9px] text-gray-500 mt-0.5">
-              f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz | N = {params.N} nodes | Reflective boundaries
+              Independent frequency control for each source on each simulation
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -203,105 +220,13 @@ export default function App() {
       </header>
 
       <main className="max-w-[1920px] mx-auto px-4 py-3 space-y-3">
-        {/* ── Controls ── */}
-        <div className="grid grid-cols-4 gap-3">
-          <div className="bg-[#0a0a1a] rounded-lg border border-gray-800/50 p-3">
-            <label className="flex justify-between text-[10px] mb-1">
-              <span className="text-gray-400">Frequency f₁</span>
-              <span className="text-cyan-400 font-bold">{fmtFixed(omegaToGHz(params.omega1), 2)} GHz</span>
-            </label>
-            <input type="range" min="5" max="100" step="0.5" value={params.omega1}
-              onChange={e => setParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))} className="w-full" />
-          </div>
-          <div className="bg-[#0a0a1a] rounded-lg border border-gray-800/50 p-3">
-            <label className="flex justify-between text-[10px] mb-1">
-              <span className="text-gray-400">Amplitude A</span>
-              <span className="text-green-400 font-bold">{fmtFixed(params.amplitude, 2)}</span>
-            </label>
-            <input type="range" min="0.1" max="3.0" step="0.05" value={params.amplitude}
-              onChange={e => setParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))} className="w-full" />
-          </div>
-          <div className="bg-[#0a0a1a] rounded-lg border border-gray-800/50 p-3">
-            <label className="flex justify-between text-[10px] mb-1">
-              <span className="text-gray-400">Dissipation G</span>
-              <span className="text-orange-400 font-bold">{fmtFixed(params.G, 4)}</span>
-            </label>
-            <input type="range" min="0" max="0.01" step="0.0001" value={params.G}
-              onChange={e => setParams(p => ({ ...p, G: parseFloat(e.target.value) }))} className="w-full" />
-          </div>
-          <div className="bg-[#0a0a1a] rounded-lg border border-gray-800/50 p-3">
-            <label className="flex justify-between text-[10px] mb-1">
-              <span className="text-gray-400">Reflection coeff</span>
-              <span className="text-yellow-400 font-bold">0.85</span>
-            </label>
-            <div className="text-[9px] text-gray-600 mt-1">
-              λ₁ = {fmtFixed(2 * Math.PI / params.omega1 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes |
-              λ₂ = {fmtFixed(2 * Math.PI / omega2 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes
-            </div>
-          </div>
-        </div>
-
-        {/* ── Frequency Control ── */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-[#0a0a1a] rounded-lg border border-cyan-900/30 p-3">
-            <h3 className="text-[10px] font-bold text-cyan-400 mb-2">⚡ LEFT SOURCE (i=0)</h3>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setParams(p => ({ ...p, leftFreq1Enabled: !p.leftFreq1Enabled }))}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-bold transition-all border ${
-                  params.leftFreq1Enabled !== false
-                    ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
-                    : 'bg-gray-900 text-gray-600 border-gray-700'
-                }`}
-              >
-                f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz
-              </button>
-              <button
-                onClick={() => setParams(p => ({ ...p, leftFreq2Enabled: !p.leftFreq2Enabled }))}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-bold transition-all border ${
-                  params.leftFreq2Enabled !== false
-                    ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
-                    : 'bg-gray-900 text-gray-600 border-gray-700'
-                }`}
-              >
-                f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz
-              </button>
-            </div>
-          </div>
-          <div className="bg-[#0a0a1a] rounded-lg border border-purple-900/30 p-3">
-            <h3 className="text-[10px] font-bold text-purple-400 mb-2">∿ RIGHT SOURCE (i={params.N - 1})</h3>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setParams(p => ({ ...p, rightFreq1Enabled: !p.rightFreq1Enabled }))}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-bold transition-all border ${
-                  params.rightFreq1Enabled !== false
-                    ? 'bg-purple-900/50 text-purple-300 border-purple-600'
-                    : 'bg-gray-900 text-gray-600 border-gray-700'
-                }`}
-              >
-                f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz
-              </button>
-              <button
-                onClick={() => setParams(p => ({ ...p, rightFreq2Enabled: !p.rightFreq2Enabled }))}
-                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-bold transition-all border ${
-                  params.rightFreq2Enabled !== false
-                    ? 'bg-purple-900/50 text-purple-300 border-purple-600'
-                    : 'bg-gray-900 text-gray-600 border-gray-700'
-                }`}
-              >
-                f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz
-              </button>
-            </div>
-          </div>
-        </div>
-
         {/* ── Collision Views side by side ── */}
         <div className="grid grid-cols-2 gap-3">
           {/* Irrational */}
           <section className="bg-[#0a0a1a] rounded-lg border-2 border-cyan-900/50 p-3">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="text-xs font-bold text-cyan-400">
-                ⚡ IRRATIONAL — R = {params.R}
+                ⚡ IRRATIONAL — R = {irrParams.R}
               </h2>
               <div className={`px-2 py-0.5 rounded text-[10px] font-bold ${
                 irrGain > 1.5 ? 'bg-red-900/50 text-red-300 border border-red-700' : 'bg-gray-800 text-gray-500'
@@ -309,12 +234,67 @@ export default function App() {
                 K = {fmtFixed(irrGain, 2)}×
               </div>
             </div>
-            <CollisionView vRight={irrState.vRight} vLeft={irrState.vLeft} N={params.N} time={irrState.time} />
+            
+            {/* Frequency controls for Irrational */}
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
+                <div className="text-[9px] text-cyan-400 font-bold mb-1">LEFT SOURCE</div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setIrrParams(p => ({ ...p, leftFreq1Enabled: !p.leftFreq1Enabled }))}
+                    className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                      irrParams.leftFreq1Enabled !== false
+                        ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    f₁ {fmtFixed(omegaToGHz(irrParams.omega1), 1)}GHz
+                  </button>
+                  <button
+                    onClick={() => setIrrParams(p => ({ ...p, leftFreq2Enabled: !p.leftFreq2Enabled }))}
+                    className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                      irrParams.leftFreq2Enabled !== false
+                        ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    f₂ {fmtFixed(omegaToGHz(irrOmega2), 1)}GHz
+                  </button>
+                </div>
+              </div>
+              <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
+                <div className="text-[9px] text-cyan-400 font-bold mb-1">RIGHT SOURCE</div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setIrrParams(p => ({ ...p, rightFreq1Enabled: !p.rightFreq1Enabled }))}
+                    className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                      irrParams.rightFreq1Enabled !== false
+                        ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    f₁ {fmtFixed(omegaToGHz(irrParams.omega1), 1)}GHz
+                  </button>
+                  <button
+                    onClick={() => setIrrParams(p => ({ ...p, rightFreq2Enabled: !p.rightFreq2Enabled }))}
+                    className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                      irrParams.rightFreq2Enabled !== false
+                        ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    f₂ {fmtFixed(omegaToGHz(irrOmega2), 1)}GHz
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <CollisionView vRight={irrState.vRight} vLeft={irrState.vLeft} N={irrParams.N} time={irrState.time} />
           </section>
 
           {/* Harmonic */}
           <section className="bg-[#0a0a1a] rounded-lg border-2 border-purple-900/50 p-3">
-            <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="text-xs font-bold text-purple-400">
                 ∿ HARMONIC — R = 2.0
               </h2>
@@ -324,7 +304,62 @@ export default function App() {
                 K = {fmtFixed(harmGain, 2)}×
               </div>
             </div>
-            <CollisionView vRight={harmState.vRight} vLeft={harmState.vLeft} N={params.N} time={harmState.time} />
+
+            {/* Frequency controls for Harmonic */}
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30">
+                <div className="text-[9px] text-purple-400 font-bold mb-1">LEFT SOURCE</div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setHarmParams(p => ({ ...p, leftFreq1Enabled: !p.leftFreq1Enabled }))}
+                    className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                      harmParams.leftFreq1Enabled !== false
+                        ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    f₁ {fmtFixed(omegaToGHz(harmParams.omega1), 1)}GHz
+                  </button>
+                  <button
+                    onClick={() => setHarmParams(p => ({ ...p, leftFreq2Enabled: !p.leftFreq2Enabled }))}
+                    className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                      harmParams.leftFreq2Enabled !== false
+                        ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    f₂ {fmtFixed(omegaToGHz(harmOmega2), 1)}GHz
+                  </button>
+                </div>
+              </div>
+              <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30">
+                <div className="text-[9px] text-purple-400 font-bold mb-1">RIGHT SOURCE</div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setHarmParams(p => ({ ...p, rightFreq1Enabled: !p.rightFreq1Enabled }))}
+                    className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                      harmParams.rightFreq1Enabled !== false
+                        ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    f₁ {fmtFixed(omegaToGHz(harmParams.omega1), 1)}GHz
+                  </button>
+                  <button
+                    onClick={() => setHarmParams(p => ({ ...p, rightFreq2Enabled: !p.rightFreq2Enabled }))}
+                    className={`flex-1 px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                      harmParams.rightFreq2Enabled !== false
+                        ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    f₂ {fmtFixed(omegaToGHz(harmOmega2), 1)}GHz
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <CollisionView vRight={harmState.vRight} vLeft={harmState.vLeft} N={harmParams.N} time={harmState.time} />
           </section>
         </div>
 
@@ -393,7 +428,7 @@ export default function App() {
             <h3 className="text-[9px] font-bold text-cyan-400 mb-1">Energy Profile — Irrational</h3>
             <div className="flex items-end gap-px h-16 bg-gray-900/50 rounded p-1 border border-gray-800/30">
               {Array.from(irrState.energies).map((e, i) => {
-                const N = params.N;
+                const N = irrParams.N;
                 const cIdx1 = Math.floor(N / 2) - 1;
                 const cIdx2 = Math.floor(N / 2);
                 const energy = Number.isFinite(e) ? e : 0;
@@ -409,7 +444,7 @@ export default function App() {
             <h3 className="text-[9px] font-bold text-purple-400 mb-1">Energy Profile — Harmonic</h3>
             <div className="flex items-end gap-px h-16 bg-gray-900/50 rounded p-1 border border-gray-800/30">
               {Array.from(harmState.energies).map((e, i) => {
-                const N = params.N;
+                const N = harmParams.N;
                 const cIdx1 = Math.floor(N / 2) - 1;
                 const cIdx2 = Math.floor(N / 2);
                 const energy = Number.isFinite(e) ? e : 0;
