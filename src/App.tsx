@@ -9,6 +9,7 @@ import {
   pressureToDb,
 } from './acousticSimulation';
 import AcousticView from './AcousticView';
+import PeakComparisonChart from './PeakComparisonChart';
 
 function fmtSci(v: number): string { return Number.isFinite(v) ? v.toExponential(2) : '0.00e+0'; }
 function fmtFixed(v: number, d = 2): string { return Number.isFinite(v) ? v.toFixed(d) : '—'; }
@@ -369,6 +370,17 @@ export default function App() {
               );
             })()}
           </div>
+        </section>
+
+        {/* Combined Peak Comparison Chart */}
+        <section className="bg-[#0a0a1a] rounded-lg border-2 border-yellow-900/50 p-3">
+          <h2 className="text-sm font-bold text-yellow-400 mb-2">📈 Combined Peak Comparison</h2>
+          <PeakComparisonChart
+            irrHistory={irrPeakHistory}
+            harmHistory={harmPeakHistory}
+            irrMax={irrMaxPeak}
+            harmMax={harmMaxPeak}
+          />
         </section>
 
         {/* Physical Constants */}

@@ -41,10 +41,11 @@ export interface AcousticParams {
 }
 
 export interface AcousticState {
-  pressure: Float64Array;  // Acoustic pressure (Pa)
-  velocity: Float64Array;  // Particle velocity (m/s)
+  pressure: Float64Array;      // Acoustic pressure (Pa) — current
+  pressurePrev: Float64Array;  // Acoustic pressure (Pa) — previous timestep
+  velocity: Float64Array;      // Particle velocity (m/s)
   time: number;
-  energyDensity: Float64Array;  // Energy density (J/m³)
+  energyDensity: Float64Array; // Energy density (J/m³)
 }
 
 export const DEFAULT_ACOUSTIC_PARAMS: AcousticParams = {
@@ -89,7 +90,7 @@ function rightSpeaker(t: number, p: AcousticParams): number {
 }
 
 // Wave equation: ∂²p/∂t² = c²·∂²p/∂x²
-// Using finite differences
+// Using Verlet integration: p(t+dt) = 2p(t) - p(t-dt) + (c·dt/dx)²·(p[i-1] - 2p[i] + p[i+1])
 export function advanceAcousticSimulation(
   state: AcousticState,
   dt: number,
@@ -106,27 +107,28 @@ export function advanceAcousticSimulation(
   newPressure[0] = leftSpeaker(state.time + dt, params);
   newPressure[N - 1] = rightSpeaker(state.time + dt, params);
   
-  // Update interior points using wave equation
-  const c2dt2_dx2 = (c * dt / dx) * (c * dt / dx);
+  // Courant number for stability check
+  const courant = c * dt / dx;
+  if (courant > 1) {
+    console.warn('Courant number > 1, simulation may be unstable');
+  }
+  
+  // Update interior points using wave equation (Verlet scheme)
+  const courant2 = courant * courant;
   
   for (let i = 1; i < N - 1; i++) {
-    const p_prev = state.pressure[i - 1];
+    const p_left = state.pressure[i - 1];
     const p_curr = state.pressure[i];
-    const p_next = state.pressure[i + 1];
+    const p_right = state.pressure[i + 1];
+    const p_prev = state.pressurePrev[i]; // pressure at t-dt
     
-    // ∂²p/∂x² ≈ (p[i-1] - 2p[i] + p[i+1]) / dx²
-    const d2p_dx2 = (p_prev - 2 * p_curr + p_next) / (dx * dx);
-    
-    // ∂²p/∂t² = c²·∂²p/∂x²
-    // Using Verlet integration: p(t+dt) = 2p(t) - p(t-dt) + c²·dt²·∂²p/∂x²
-    // For simplicity, assume p(t-dt) ≈ p(t) - dt·∂p/∂t
-    // This is a simplified version
-    newPressure[i] = 2 * p_curr - state.pressure[i] + c2dt2_dx2 * (p_prev - 2 * p_curr + p_next);
+    // Verlet: p(t+dt) = 2p(t) - p(t-dt) + (c·dt/dx)²·(p[i-1] - 2p[i] + p[i+1])
+    newPressure[i] = 2 * p_curr - p_prev + courant2 * (p_left - 2 * p_curr + p_right);
     
     // Particle velocity from pressure gradient
-    // ∂p/∂x = -ρ·∂v/∂t → v ≈ -dt/(ρ·dx) · (p[i+1] - p[i-1])/2
-    const dp_dx = (p_next - p_prev) / (2 * dx);
-    newVelocity[i] = -dt / (PHYSICAL_CONSTANTS.rho * dx) * dp_dx;
+    // Euler equation: ρ·∂v/∂t = -∂p/∂x
+    const dp_dx = (p_right - p_left) / (2 * dx);
+    newVelocity[i] = state.velocity[i] - (dt / PHYSICAL_CONSTANTS.rho) * dp_dx;
   }
   
   // Boundary velocities (zero at rigid speakers)
@@ -147,6 +149,7 @@ export function advanceAcousticSimulation(
   
   return {
     pressure: newPressure,
+    pressurePrev: state.pressure, // current becomes previous for next step
     velocity: newVelocity,
     time: state.time + dt,
     energyDensity,
@@ -156,6 +159,7 @@ export function advanceAcousticSimulation(
 export function createInitialAcousticState(params: AcousticParams): AcousticState {
   const N = params.N;
   const pressure = new Float64Array(N);
+  const pressurePrev = new Float64Array(N);
   const velocity = new Float64Array(N);
   const energyDensity = new Float64Array(N);
   
@@ -163,7 +167,12 @@ export function createInitialAcousticState(params: AcousticParams): AcousticStat
   pressure[0] = leftSpeaker(0, params);
   pressure[N - 1] = rightSpeaker(0, params);
   
-  return { pressure, velocity, time: 0, energyDensity };
+  // Initialize pressurePrev to same as pressure (no previous state)
+  for (let i = 0; i < N; i++) {
+    pressurePrev[i] = pressure[i];
+  }
+  
+  return { pressure, pressurePrev, velocity, time: 0, energyDensity };
 }
 
 export function getCenterPeakEnergy(state: AcousticState): number {
