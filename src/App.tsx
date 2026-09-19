@@ -25,6 +25,7 @@ export default function App() {
     f1: 1000.0,
     R: 1.475482818459,
     amplitude: 20.0,
+    amplitudeRatio: 1.0,
     mode: 'irrational',
     temperature: 293.0,
   });
@@ -36,6 +37,7 @@ export default function App() {
     f1: 1000.0,
     R: 2.0,
     amplitude: 20.0,
+    amplitudeRatio: 1.0,
     mode: 'harmonic',
     temperature: 293.0,
   });
@@ -128,8 +130,8 @@ export default function App() {
 
   const handleReset = () => {
     setIsRunning(false);
-    const resetIrr = { ...irrParams, f1: 1000.0, amplitude: 20.0, temperature: 293.0 };
-    const resetHarm = { ...harmParams, f1: 1000.0, amplitude: 20.0, temperature: 293.0 };
+    const resetIrr = { ...irrParams, f1: 1000.0, amplitude: 20.0, amplitudeRatio: 1.0, temperature: 293.0 };
+    const resetHarm = { ...harmParams, f1: 1000.0, amplitude: 20.0, amplitudeRatio: 1.0, temperature: 293.0 };
     setIrrParams(resetIrr);
     setHarmParams(resetHarm);
     const irrNew = createInitialAcousticState(resetIrr);
@@ -210,6 +212,20 @@ export default function App() {
               {fmtFixed(pressureToDb(irrParams.amplitude), 1)} dB SPL | Threshold of pain: 120 dB (20 Pa)
             </div>
             
+            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">AMPLITUDE RATIO (k = A₂/A₁)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="0.1" max="5.0" step="0.1"
+                value={irrParams.amplitudeRatio}
+                onChange={(e) => setIrrParams(p => ({ ...p, amplitudeRatio: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-cyan-300 font-mono w-16">k = {fmtFixed(irrParams.amplitudeRatio, 1)}</span>
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1">
+              v(t) = A₁·sin(2πf₁t) + k·A₁·sin(2πf₂t) | A₂ = {fmtFixed(irrParams.amplitudeRatio * irrParams.amplitude, 1)} Pa
+            </div>
+            
             <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">DISTANCE (L)</div>
             <div className="flex items-center gap-2">
               <input
@@ -263,6 +279,20 @@ export default function App() {
             </div>
             <div className="text-[9px] text-gray-500 mt-1">
               {fmtFixed(pressureToDb(harmParams.amplitude), 1)} dB SPL | Threshold of pain: 120 dB (20 Pa)
+            </div>
+            
+            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">AMPLITUDE RATIO (k = A₂/A₁)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="0.1" max="5.0" step="0.1"
+                value={harmParams.amplitudeRatio}
+                onChange={(e) => setHarmParams(p => ({ ...p, amplitudeRatio: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-purple-300 font-mono w-16">k = {fmtFixed(harmParams.amplitudeRatio, 1)}</span>
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1">
+              v(t) = A₁·sin(2πf₁t) + k·A₁·sin(2πf₂t) | A₂ = {fmtFixed(harmParams.amplitudeRatio * harmParams.amplitude, 1)} Pa
             </div>
             
             <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">DISTANCE (L)</div>

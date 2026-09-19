@@ -36,6 +36,7 @@ export interface AcousticParams {
   f1: number;             // Base frequency (Hz)
   R: number;              // Frequency ratio
   amplitude: number;      // Pressure amplitude (Pa)
+  amplitudeRatio: number; // Amplitude weight for second frequency (k)
   mode: 'irrational' | 'harmonic';
   temperature: number;    // Air temperature (K)
 }
@@ -54,6 +55,7 @@ export const DEFAULT_ACOUSTIC_PARAMS: AcousticParams = {
   f1: 1000.0,          // 1 kHz base frequency
   R: 1.475482818459,
   amplitude: 20.0,     // 20 Pa (~120 dB SPL)
+  amplitudeRatio: 1.0, // Equal amplitude for both frequencies
   mode: 'irrational',
   temperature: 293.0,  // 20°C
 };
@@ -77,16 +79,21 @@ function sanitizeArray(arr: Float64Array): Float64Array {
   return arr;
 }
 
-// Left speaker: p₀(t) = A·[sin(2πf₁t) + sin(2πf₂t)]
+// Left speaker: p₀(t) = A₁·sin(2πf₁t) + k·A₁·sin(2πf₂t)
+// where k = amplitudeRatio (weight of second frequency)
 function leftSpeaker(t: number, p: AcousticParams): number {
   const f2 = p.mode === 'irrational' ? p.R * p.f1 : 2.0 * p.f1;
-  return p.amplitude * (Math.sin(2 * Math.PI * p.f1 * t) + Math.sin(2 * Math.PI * f2 * t));
+  const A1 = p.amplitude;
+  const A2 = p.amplitudeRatio * A1;
+  return A1 * Math.sin(2 * Math.PI * p.f1 * t) + A2 * Math.sin(2 * Math.PI * f2 * t);
 }
 
-// Right speaker: p_L(t) = A·[sin(2πf₁t) + sin(2πf₂t)] — in phase
+// Right speaker: p_L(t) = A₁·sin(2πf₁t) + k·A₁·sin(2πf₂t) — in phase
 function rightSpeaker(t: number, p: AcousticParams): number {
   const f2 = p.mode === 'irrational' ? p.R * p.f1 : 2.0 * p.f1;
-  return p.amplitude * (Math.sin(2 * Math.PI * p.f1 * t) + Math.sin(2 * Math.PI * f2 * t));
+  const A1 = p.amplitude;
+  const A2 = p.amplitudeRatio * A1;
+  return A1 * Math.sin(2 * Math.PI * p.f1 * t) + A2 * Math.sin(2 * Math.PI * f2 * t);
 }
 
 // Wave equation: ∂²p/∂t² = c²·∂²p/∂x²
