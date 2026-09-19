@@ -40,9 +40,7 @@ class RingBuffer {
 // ─── Color mapping ───────────────────────────────────────────────────────────
 
 function energyToColor(energy: number, maxEnergy: number): string {
-  if (!Number.isFinite(energy) || !Number.isFinite(maxEnergy) || maxEnergy <= 0) {
-    return 'rgb(5,5,40)';
-  }
+  if (!Number.isFinite(energy) || !Number.isFinite(maxEnergy) || maxEnergy <= 0) return 'rgb(5,5,40)';
   const t = Math.min(Math.pow(energy / maxEnergy, 0.5), 1.0);
   let r: number, g: number, b: number;
   if (t < 0.2) { const s = t / 0.2; r = 5 + 10 * s; g = 5 + 20 * s; b = 40 + 120 * s; }
@@ -75,19 +73,20 @@ export default function App() {
   const [maxEnergyHistory, setMaxEnergyHistory] = useState<{ t: number; e: number }[]>([]);
   const [, setScopeTick] = useState(0);
 
-  // Oscilloscope buffers for total voltage
+  // Oscilloscope buffers
   const scopeLeftRef = useRef(new RingBuffer(SCOPE_SIZE));
   const scopeCenterRef = useRef(new RingBuffer(SCOPE_SIZE));
   const scopeRightRef = useRef(new RingBuffer(SCOPE_SIZE));
 
-  // Oscilloscope buffers for traveling waves
-  const scopeVRightRef = useRef(new RingBuffer(SCOPE_SIZE));   // V⁺ rightward
-  const scopeVLeftRef = useRef(new RingBuffer(SCOPE_SIZE));    // V⁻ leftward
+  // Traveling wave buffers at center
+  const scopeVPlusRef = useRef(new RingBuffer(SCOPE_SIZE));   // V⁺ rightward (from left source)
+  const scopeVMinusRef = useRef(new RingBuffer(SCOPE_SIZE));  // V⁻ leftward (from right source)
+  const scopeVTotalRef = useRef(new RingBuffer(SCOPE_SIZE));  // V⁺ + V⁻ = total at center
 
-  // Waterfall history
+  // Waterfall
   const waterfallRef = useRef<Float32Array[]>([]);
 
-  // Pulse animation state
+  // Pulse animation
   const [pulsePhase, setPulsePhase] = useState(0);
 
   const stateRef = useRef(state);
@@ -127,12 +126,16 @@ export default function App() {
         scopeLeftRef.current.push(currentState.voltages[0]);
         scopeCenterRef.current.push(currentState.voltages[9]);
         scopeRightRef.current.push(currentState.voltages[paramsRef.current.N - 1]);
-        // Traveling waves at center node
-        scopeVRightRef.current.push(currentState.vRight[9]);
-        scopeVLeftRef.current.push(currentState.vLeft[9]);
+        
+        // Traveling waves at center
+        const vPlus = currentState.vRight[9];
+        const vMinus = currentState.vLeft[9];
+        scopeVPlusRef.current.push(vPlus);
+        scopeVMinusRef.current.push(vMinus);
+        scopeVTotalRef.current.push(vPlus + vMinus);
       }
 
-      // Sample waterfall
+      // Waterfall
       if (currentState.time - lastWaterfallTime.current >= WATERFALL_SAMPLE_INTERVAL) {
         lastWaterfallTime.current = currentState.time;
         const snapshot = new Float32Array(paramsRef.current.N);
@@ -161,7 +164,6 @@ export default function App() {
           });
         }
         setScopeTick(t => t + 1);
-        // Pulse animation
         setPulsePhase(p => (p + 1) % 100);
       }
     }
@@ -194,8 +196,9 @@ export default function App() {
     scopeLeftRef.current.reset();
     scopeCenterRef.current.reset();
     scopeRightRef.current.reset();
-    scopeVRightRef.current.reset();
-    scopeVLeftRef.current.reset();
+    scopeVPlusRef.current.reset();
+    scopeVMinusRef.current.reset();
+    scopeVTotalRef.current.reset();
     waterfallRef.current = [];
     setPulsePhase(0);
   };
@@ -243,15 +246,14 @@ export default function App() {
 
   const scopeSampleRate = 1 / SCOPE_SAMPLE_INTERVAL;
 
-  // ─── Pulse animation positions (for wave direction indicators) ─────────────
-  // Pulses travel from left boundary → center and right boundary → center
+  // Pulse animation
   const leftPulses = [0, 1, 2, 3].map(k => {
     const phase = ((pulsePhase + k * 25) % 100) / 100;
-    return phase * 0.45; // 0 to 0.45 (left half of line)
+    return phase * 0.45;
   });
   const rightPulses = [0, 1, 2, 3].map(k => {
     const phase = ((pulsePhase + k * 25) % 100) / 100;
-    return 1.0 - phase * 0.45; // 1.0 to 0.55 (right half of line)
+    return 1.0 - phase * 0.45;
   });
 
   return (
@@ -284,54 +286,45 @@ export default function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-4 space-y-4">
 
         {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* COUNTER-PROPAGATING WAVES VISUALIZATION                            */}
+        {/* COUNTER-PROPAGATING WAVES — HEAD-ON COLLISION                      */}
         {/* ════════════════════════════════════════════════════════════════════ */}
         <section className="bg-[#0a0a1a] rounded-xl border border-cyan-900/30 p-4">
           <h2 className="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-1">
-            ↗↖ Counter-Propagating Waves — V⁺ (rightward) &amp; V⁻ (leftward)
+            ↗↖ Head-On Collision — Complex Sum-of-Sines Waves
           </h2>
           <p className="text-[10px] text-gray-500 mb-3">
-            Left source launches V⁺ → rightward &nbsp;|&nbsp; Right source launches V⁻ ← leftward &nbsp;|&nbsp;
-            They meet and interfere at the center
+            Left source launches V⁺ = ½A[sin(ω₁t) + sin(ω₂t)] → rightward &nbsp;|&nbsp;
+            Right source launches V⁻ = ½A[sin(ω₁t+π) + sin(ω₂t+π)] ← leftward &nbsp;|&nbsp;
+            They collide at center → interference peaks
           </p>
 
-          {/* Animated line with directional pulses */}
+          {/* Animated line */}
           <div className="relative bg-gray-900/50 rounded-lg p-4 border border-gray-800/30 mb-4">
-            {/* Direction arrows background */}
             <div className="absolute inset-0 flex items-center pointer-events-none overflow-hidden rounded-lg">
-              {/* Left-to-right gradient arrow */}
               <div className="absolute left-4 top-1/2 -translate-y-1/2 w-[40%] h-6 flex items-center">
                 <div className="flex-1 h-[2px] bg-gradient-to-r from-cyan-500/40 to-transparent" />
                 <div className="text-cyan-400 text-lg animate-pulse">▶</div>
               </div>
-              {/* Right-to-left gradient arrow */}
               <div className="absolute right-4 top-1/2 -translate-y-1/2 w-[40%] h-6 flex items-center justify-end">
                 <div className="text-purple-400 text-lg animate-pulse">◀</div>
                 <div className="flex-1 h-[2px] bg-gradient-to-l from-purple-500/40 to-transparent" />
               </div>
             </div>
 
-            {/* The LC chain with animated pulses */}
             <div className="relative flex items-center justify-between px-6 py-6 min-h-[80px]">
-              {/* Connection line */}
               <div className="absolute top-1/2 left-6 right-6 h-0.5 bg-gray-700/50 -translate-y-1/2" />
 
-              {/* Animated pulses traveling left→right (cyan) */}
               {leftPulses.map((pos, k) => (
                 <div key={`lp-${k}`}
-                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-cyan-400 opacity-70 blur-[1px] transition-none"
-                  style={{ left: `${6 + pos * 88}%` }}
-                />
+                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-cyan-400 opacity-70 blur-[1px]"
+                  style={{ left: `${6 + pos * 88}%` }} />
               ))}
-              {/* Animated pulses traveling right→left (purple) */}
               {rightPulses.map((pos, k) => (
                 <div key={`rp-${k}`}
-                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-purple-400 opacity-70 blur-[1px] transition-none"
-                  style={{ left: `${6 + pos * 88}%` }}
-                />
+                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-purple-400 opacity-70 blur-[1px]"
+                  style={{ left: `${6 + pos * 88}%` }} />
               ))}
 
-              {/* Nodes */}
               {Array.from(state.voltages).map((_, i) => {
                 const isCenter = i === 9 || i === 10;
                 const energy = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
@@ -346,7 +339,6 @@ export default function App() {
               })}
             </div>
 
-            {/* Boundary labels with arrows */}
             <div className="flex justify-between items-center mt-1">
               <div className="flex items-center gap-1">
                 <span className="text-cyan-400 font-bold text-xs">◀ V⁺ SOURCE</span>
@@ -362,69 +354,74 @@ export default function App() {
             </div>
           </div>
 
-          {/* Traveling wave oscilloscopes at center */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {/* ══════════════════════════════════════════════════════════════════ */}
+          {/* THREE OSCILLOSCOPES: V⁺, V⁻, V⁺+V⁻                            */}
+          {/* ══════════════════════════════════════════════════════════════════ */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <div className="text-[10px] text-cyan-400 mb-1 font-bold">
-                V⁺ RIGHTWARD WAVE at center (i=9) — from LEFT source
+                V⁺ RIGHTWARD WAVE (from LEFT source)
               </div>
               <Oscilloscope
-                buffer={scopeVRightRef.current.data}
-                writeIdx={scopeVRightRef.current.writeIdx}
-                length={scopeVRightRef.current.count}
-                label="V⁺₉(t) → rightward"
+                buffer={scopeVPlusRef.current.data}
+                writeIdx={scopeVPlusRef.current.writeIdx}
+                length={scopeVPlusRef.current.count}
+                label="V⁺ = ½A[sin(ω₁t)+sin(ω₂t)] →"
                 color="rgb(0, 220, 255)"
-                height={110}
+                height={120}
               />
             </div>
             <div>
               <div className="text-[10px] text-purple-400 mb-1 font-bold">
-                V⁻ LEFTWARD WAVE at center (i=9) — from RIGHT source
+                V⁻ LEFTWARD WAVE (from RIGHT source)
               </div>
               <Oscilloscope
-                buffer={scopeVLeftRef.current.data}
-                writeIdx={scopeVLeftRef.current.writeIdx}
-                length={scopeVLeftRef.current.count}
-                label="V⁻₉(t) ← leftward"
+                buffer={scopeVMinusRef.current.data}
+                writeIdx={scopeVMinusRef.current.writeIdx}
+                length={scopeVMinusRef.current.count}
+                label="V⁻ = ½A[sin(ω₁t+π)+sin(ω₂t+π)] ←"
                 color="rgb(200, 100, 255)"
-                height={110}
+                height={120}
+              />
+            </div>
+            <div>
+              <div className="text-[10px] text-yellow-400 mb-1 font-bold">
+                V⁺ + V⁻ = TOTAL (interference peaks!)
+              </div>
+              <Oscilloscope
+                buffer={scopeVTotalRef.current.data}
+                writeIdx={scopeVTotalRef.current.writeIdx}
+                length={scopeVTotalRef.current.count}
+                label="V_total = V⁺ + V⁻ (peaks!)"
+                color="rgb(255, 200, 0)"
+                height={120}
               />
             </div>
           </div>
           <div className="mt-2 text-[9px] text-gray-500 text-center">
-            V⁺ = (V + Z·I)/2 &nbsp;|&nbsp; V⁻ = (V − Z·I)/2 &nbsp;|&nbsp;
-            Z = √(L/C) = {fmtFixed(Math.sqrt(params.L / params.C), 3)} Ω &nbsp;|&nbsp;
-            Total V = V⁺ + V⁻
+            V⁺ and V⁻ are complex sum-of-sines waves traveling in opposite directions. When they collide at center, they interfere → peaks visible in V_total.
           </div>
         </section>
 
         {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* SOURCE OSCILLOSCOPES                                               */}
+        {/* SPECTRUM ANALYZER — V⁺+V⁻                                         */}
         {/* ════════════════════════════════════════════════════════════════════ */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            📡 Source Signals — Complex Irrational Sum-of-Sines
+        <section className="bg-[#0a0a1a] rounded-xl border border-yellow-900/30 p-4">
+          <h2 className="text-xs font-bold text-yellow-400 uppercase tracking-wider mb-3">
+            📊 Spectrum of V⁺+V⁻ at Center — Two Peaks from Irrational Pumping
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <div className="text-[10px] text-cyan-400 mb-1 font-bold">
-                LEFT SOURCE V₀(t) = ½A[sin(ω₁t) + sin(ω₂t)]
-              </div>
-              <Oscilloscope buffer={scopeLeftRef.current.data} writeIdx={scopeLeftRef.current.writeIdx}
-                length={scopeLeftRef.current.count} label="V₀(t)" color="rgb(0, 220, 255)" height={110} />
-            </div>
-            <div>
-              <div className="text-[10px] text-purple-400 mb-1 font-bold">
-                RIGHT SOURCE V₁₉(t) = ½A[sin(ω₁t+π) + sin(ω₂t+π)] — anti-phase
-              </div>
-              <Oscilloscope buffer={scopeRightRef.current.data} writeIdx={scopeRightRef.current.writeIdx}
-                length={scopeRightRef.current.count} label="V₁₉(t)" color="rgb(200, 100, 255)" height={110} />
-            </div>
-          </div>
+          <Spectrum
+            buffer={scopeVTotalRef.current.data}
+            writeIdx={scopeVTotalRef.current.writeIdx}
+            length={scopeVTotalRef.current.count}
+            sampleRate={scopeSampleRate}
+            label="|V_total(f)| at center (i=9)"
+            color="rgb(255, 200, 0)"
+            height={140}
+          />
           <div className="mt-2 text-[9px] text-gray-600 text-center">
-            ω₁ = {fmtFixed(params.omega1, 1)} rad/s ({fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz) &nbsp;|&nbsp;
-            ω₂ = {fmtFixed(omega2, 1)} rad/s ({fmtFixed(omega2 / (2 * Math.PI), 2)} Hz) &nbsp;|&nbsp;
-            ω₂/ω₁ = {params.mode === 'irrational' ? '1.47548… (irrational)' : '2.0 (rational)'}
+            Two spectral peaks at f₁ = {fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz and f₂ = {fmtFixed(omega2 / (2 * Math.PI), 2)} Hz
+            {params.mode === 'irrational' && ' • Irrational ratio → quasi-periodic beating → energy accumulates at center'}
           </div>
         </section>
 
@@ -439,33 +436,6 @@ export default function App() {
           <div className="mt-2 flex justify-between text-[9px] text-gray-600">
             <span>↑ Recent (top) → Past (bottom) &nbsp;|&nbsp; Diagonal streaks = traveling waves</span>
             <span>Yellow dashed = focus nodes</span>
-          </div>
-        </section>
-
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        {/* SPECTRUM ANALYZER                                                  */}
-        {/* ════════════════════════════════════════════════════════════════════ */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            📊 Frequency Spectrum — Two Peaks from Irrational Pumping
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <div className="text-[10px] text-cyan-400 mb-1 font-bold">SPECTRUM at LEFT SOURCE</div>
-              <Spectrum buffer={scopeLeftRef.current.data} writeIdx={scopeLeftRef.current.writeIdx}
-                length={scopeLeftRef.current.count} sampleRate={scopeSampleRate}
-                label="|V₀(f)|" color="rgb(0, 220, 255)" height={110} />
-            </div>
-            <div>
-              <div className="text-[10px] text-yellow-400 mb-1 font-bold">SPECTRUM at CENTER (i=9) — after wave collision</div>
-              <Spectrum buffer={scopeCenterRef.current.data} writeIdx={scopeCenterRef.current.writeIdx}
-                length={scopeCenterRef.current.count} sampleRate={scopeSampleRate}
-                label="|V₉(f)|" color="rgb(255, 200, 0)" height={110} />
-            </div>
-          </div>
-          <div className="mt-2 text-[9px] text-gray-600 text-center">
-            Two spectral peaks at f₁ = {fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz and f₂ = {fmtFixed(omega2 / (2 * Math.PI), 2)} Hz
-            {params.mode === 'irrational' && ' • Irrational ratio → quasi-periodic beating → energy accumulates at center'}
           </div>
         </section>
 
