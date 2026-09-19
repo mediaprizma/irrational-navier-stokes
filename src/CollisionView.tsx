@@ -49,8 +49,10 @@ export default function CollisionView({ vRight, vLeft, N, time }: Props) {
     ctx.beginPath(); ctx.moveTo(pad, zeroY); ctx.lineTo(W - pad, zeroY); ctx.stroke();
 
     // Center zone highlight
-    const cx1 = pad + (9 / (N - 1)) * plotW;
-    const cx2 = pad + (10 / (N - 1)) * plotW;
+    const cIdx1 = Math.floor(N / 2) - 1;
+    const cIdx2 = Math.floor(N / 2);
+    const cx1 = pad + (cIdx1 / (N - 1)) * plotW;
+    const cx2 = pad + (cIdx2 / (N - 1)) * plotW;
     ctx.fillStyle = 'rgba(255, 200, 0, 0.05)';
     ctx.fillRect(cx1 - 5, pad, cx2 - cx1 + 10, plotH);
     ctx.strokeStyle = 'rgba(255, 200, 0, 0.3)';
@@ -148,7 +150,8 @@ export default function CollisionView({ vRight, vLeft, N, time }: Props) {
     ctx.shadowBlur = 0;
 
     // ── Mark peaks in V⁺+V⁻ at center ──
-    for (let i = 8; i <= 11; i++) {
+    for (let i = cIdx1 - 2; i <= cIdx2 + 2; i++) {
+      if (i < 0 || i >= N) continue;
       const vr = Number.isFinite(vRight[i]) ? vRight[i] : 0;
       const vl = Number.isFinite(vLeft[i]) ? vLeft[i] : 0;
       const vt = vr + vl;

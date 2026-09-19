@@ -24,15 +24,19 @@ export interface SimulationState {
 }
 
 export const DEFAULT_PARAMS: SimulationParams = {
-  N: 20,
+  N: 80,
   L: 0.01,
   C: 0.01,
-  G: 0.005,
+  G: 0.002,
   omega1: 30.0,
   R: 1.475482818459,
   amplitude: 1.0,
   mode: 'irrational',
 };
+// With N=80, c=1/√(LC)=100:
+//   λ₁ = 2π·c/ω₁ ≈ 21 nodes → ~4 wavelengths fit in the line → visible nodes/antinodes
+//   λ₂ = 2π·c/ω₂ ≈ 14 nodes → ~6 wavelengths fit in the line
+// Two standing wave patterns with different numbers of antinodes interfere!
 
 // ─── NaN-safe helpers ────────────────────────────────────────────────────────
 
@@ -260,8 +264,10 @@ export function advanceSimulation(
 // ─── Analytics ───────────────────────────────────────────────────────────────
 
 export function computeGainCoefficient(energies: Float64Array, N: number): number {
-  const eCenter = Math.max(safeNum(energies[9]), safeNum(energies[10]));
-  const edgeIdx = [0, 1, 2, N - 3, N - 2, N - 1];
+  const cIdx1 = Math.floor(N / 2) - 1;
+  const cIdx2 = Math.floor(N / 2);
+  const eCenter = Math.max(safeNum(energies[cIdx1]), safeNum(energies[cIdx2]));
+  const edgeIdx = [0, 1, 2, 3, N - 4, N - 3, N - 2, N - 1];
   let eEdge = 0;
   for (const i of edgeIdx) eEdge += safeNum(energies[i]);
   eEdge /= edgeIdx.length;

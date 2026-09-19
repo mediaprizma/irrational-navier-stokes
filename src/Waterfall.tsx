@@ -95,8 +95,10 @@ export default function Waterfall({ history, maxRows, N, mode }: Props) {
     ctx.strokeStyle = 'rgba(255, 200, 0, 0.5)';
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
-    const cx1 = (9 / (N - 1)) * W;
-    const cx2 = (10 / (N - 1)) * W;
+    const cIdx1 = Math.floor(N / 2) - 1;
+    const cIdx2 = Math.floor(N / 2);
+    const cx1 = (cIdx1 / (N - 1)) * W;
+    const cx2 = (cIdx2 / (N - 1)) * W;
     ctx.beginPath(); ctx.moveTo(cx1, 0); ctx.lineTo(cx1, H); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(cx2, 0); ctx.lineTo(cx2, H); ctx.stroke();
     ctx.setLineDash([]);

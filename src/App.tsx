@@ -130,13 +130,15 @@ export default function App() {
       // Sample oscilloscopes
       if (currentState.time - lastScopeSampleTime.current >= SCOPE_SAMPLE_INTERVAL) {
         lastScopeSampleTime.current = currentState.time;
+        const N = paramsRef.current.N;
+        const cIdx = Math.floor(N / 2);
         scopeLeftRef.current.push(currentState.voltages[0]);
-        scopeCenterRef.current.push(currentState.voltages[9]);
-        scopeRightRef.current.push(currentState.voltages[paramsRef.current.N - 1]);
+        scopeCenterRef.current.push(currentState.voltages[cIdx]);
+        scopeRightRef.current.push(currentState.voltages[N - 1]);
         
         // Traveling waves at center
-        const vPlus = currentState.vRight[9];
-        const vMinus = currentState.vLeft[9];
+        const vPlus = currentState.vRight[cIdx];
+        const vMinus = currentState.vLeft[cIdx];
         scopeVPlusRef.current.push(vPlus);
         scopeVMinusRef.current.push(vMinus);
         scopeVTotalRef.current.push(vPlus + vMinus);
@@ -154,12 +156,16 @@ export default function App() {
       }
 
       // Energy accumulation — rolling window average
-      const eCenterNow = (Number.isFinite(currentState.energies[9]) ? currentState.energies[9] : 0)
-                       + (Number.isFinite(currentState.energies[10]) ? currentState.energies[10] : 0);
       const N = paramsRef.current.N;
+      const cIdx1 = Math.floor(N / 2) - 1;
+      const cIdx2 = Math.floor(N / 2);
+      const eCenterNow = (Number.isFinite(currentState.energies[cIdx1]) ? currentState.energies[cIdx1] : 0)
+                       + (Number.isFinite(currentState.energies[cIdx2]) ? currentState.energies[cIdx2] : 0);
       const eEdgeNow = (Number.isFinite(currentState.energies[0]) ? currentState.energies[0] : 0)
                      + (Number.isFinite(currentState.energies[1]) ? currentState.energies[1] : 0)
                      + (Number.isFinite(currentState.energies[2]) ? currentState.energies[2] : 0)
+                     + (Number.isFinite(currentState.energies[3]) ? currentState.energies[3] : 0)
+                     + (Number.isFinite(currentState.energies[N - 4]) ? currentState.energies[N - 4] : 0)
                      + (Number.isFinite(currentState.energies[N - 3]) ? currentState.energies[N - 3] : 0)
                      + (Number.isFinite(currentState.energies[N - 2]) ? currentState.energies[N - 2] : 0)
                      + (Number.isFinite(currentState.energies[N - 1]) ? currentState.energies[N - 1] : 0);
@@ -265,13 +271,15 @@ export default function App() {
   const localizationActive = Number.isFinite(gainCoeff) && gainCoeff > 2.0;
   const maxEnergy = safeMax(state.energies);
   const omega2 = params.mode === 'irrational' ? params.R * params.omega1 : 2.0 * params.omega1;
+  const centerIdx1 = Math.floor(params.N / 2) - 1;
+  const centerIdx2 = Math.floor(params.N / 2);
   const centerEnergy = Math.max(
-    Number.isFinite(state.energies[9]) ? state.energies[9] : 0,
-    Number.isFinite(state.energies[10]) ? state.energies[10] : 0,
+    Number.isFinite(state.energies[centerIdx1]) ? state.energies[centerIdx1] : 0,
+    Number.isFinite(state.energies[centerIdx2]) ? state.energies[centerIdx2] : 0,
   );
   const totalEnergy = safeSum(state.energies);
   const edgeAvg = (() => {
-    const idx = [0, 1, 2, params.N - 3, params.N - 2, params.N - 1];
+    const idx = [0, 1, 2, 3, params.N - 4, params.N - 3, params.N - 2, params.N - 1];
     let s = 0;
     for (const i of idx) s += Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
     return s / idx.length;
@@ -385,12 +393,15 @@ export default function App() {
                   style={{ left: `${6 + pos * 88}%` }} />
               ))}
               {Array.from(state.voltages).map((_, i) => {
-                const isCenter = i === 9 || i === 10;
+                const N = params.N;
+                const cIdx1 = Math.floor(N / 2) - 1;
+                const cIdx2 = Math.floor(N / 2);
+                const isCenter = i === cIdx1 || i === cIdx2;
                 const energy = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
                 const color = energyToColor(energy, maxEnergy);
                 return (
                   <div key={i} className="relative z-10">
-                    <div className={`w-2.5 h-2.5 rounded-full border ${
+                    <div className={`w-2 h-2 rounded-full border ${
                       isCenter ? 'border-yellow-400 ring-2 ring-yellow-400/40' : 'border-gray-600'
                     }`} style={{ backgroundColor: color }} />
                   </div>
@@ -428,8 +439,8 @@ export default function App() {
             })()}
           </div>
           <p className="text-[10px] text-gray-500 mb-3">
-            <span className="text-yellow-400 font-bold">Yellow</span> = rolling average energy at center nodes (i=9,10) &nbsp;|&nbsp;
-            <span className="text-purple-400 font-bold">Purple</span> = rolling average energy at edge nodes (i=0,1,2,17,18,19)<br/>
+            <span className="text-yellow-400 font-bold">Yellow</span> = rolling average energy at center nodes &nbsp;|&nbsp;
+            <span className="text-purple-400 font-bold">Purple</span> = rolling average energy at edge nodes<br/>
             If <span className="text-yellow-400 font-bold">yellow is higher</span> → the irrational pumping scheme <span className="text-red-400 font-bold">DOES concentrate energy at the center</span>
           </p>
           <EnergyAccumulation history={energyAccHistory} height={240} />
@@ -472,7 +483,7 @@ export default function App() {
             writeIdx={scopeVTotalRef.current.writeIdx}
             length={scopeVTotalRef.current.count}
             sampleRate={scopeSampleRate}
-            label="|V_total(f)| at center (i=9)"
+            label="|V_total(f)| at center"
             color="rgb(255, 200, 0)"
             height={140}
           />
@@ -506,20 +517,23 @@ export default function App() {
           <div className="relative overflow-x-auto">
             <div className="relative flex items-end justify-between gap-0.5 px-2 py-4 min-w-[600px]">
               {Array.from(state.voltages).map((_, i) => {
-                const isCenter = i === 9 || i === 10;
-                const isEdge = i <= 2 || i >= params.N - 3;
+                const N = params.N;
+                const cIdx1 = Math.floor(N / 2) - 1;
+                const cIdx2 = Math.floor(N / 2);
+                const isCenter = i === cIdx1 || i === cIdx2;
+                const isEdge = i <= 3 || i >= N - 4;
                 const energy = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
                 const color = energyToColor(energy, maxEnergy);
                 const barHeight = 10 + (energy / Math.max(maxEnergy, 1e-10)) * 120;
                 return (
                   <div key={i} className="flex flex-col items-center flex-1">
-                    <div className="w-full max-w-[28px] rounded-t transition-all duration-100"
+                    <div className="w-full max-w-[12px] rounded-t transition-all duration-100"
                       style={{ height: `${barHeight}px`, backgroundColor: color,
                         boxShadow: energy / Math.max(maxEnergy, 1e-10) > 0.5 ? `0 0 ${8 + 20 * (energy / Math.max(maxEnergy, 1e-10))}px ${color}` : 'none' }} />
-                    <div className={`w-3 h-3 rounded-full mt-1 transition-all duration-100 ${isCenter ? 'ring-2 ring-yellow-400/60' : ''}`}
+                    <div className={`w-2 h-2 rounded-full mt-0.5 transition-all duration-100 ${isCenter ? 'ring-2 ring-yellow-400/60' : ''}`}
                       style={{ backgroundColor: color }} />
-                    <span className={`text-[8px] mt-0.5 ${isCenter ? 'text-yellow-400 font-bold' : isEdge ? 'text-purple-400' : 'text-gray-600'}`}>{i}</span>
-                    {isCenter && <span className="text-[7px] text-yellow-500 font-bold">▼</span>}
+                    <span className={`text-[7px] mt-0.5 ${isCenter ? 'text-yellow-400 font-bold' : isEdge ? 'text-purple-400' : 'text-gray-600'}`}>{i % 10 === 0 ? i : ''}</span>
+                    {isCenter && <span className="text-[6px] text-yellow-500 font-bold">▼</span>}
                   </div>
                 );
               })}
@@ -661,9 +675,12 @@ export default function App() {
               <div className="text-[9px] text-gray-500 mb-1">Energy Distribution</div>
               <div className="flex items-end gap-px h-14 bg-gray-900/50 rounded-lg p-1.5 border border-gray-800/30">
                 {Array.from(state.energies).map((e, i) => {
+                  const N = params.N;
+                  const cIdx1 = Math.floor(N / 2) - 1;
+                  const cIdx2 = Math.floor(N / 2);
                   const energy = Number.isFinite(e) ? e : 0;
                   const h = (energy / Math.max(maxEnergy, 1e-10)) * 100;
-                  const isCenter = i === 9 || i === 10;
+                  const isCenter = i === cIdx1 || i === cIdx2;
                   return <div key={i} className="flex-1 rounded-t-sm transition-all duration-100"
                     style={{ height: `${Math.max(h, 3)}%`, backgroundColor: isCenter ? '#fbbf24' : energyToColor(energy, maxEnergy) }} />;
                 })}

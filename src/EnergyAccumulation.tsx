@@ -6,8 +6,8 @@ import { useEffect, useRef } from 'react';
 
 interface DataPoint {
   t: number;
-  eCenter: number;  // cumulative energy at center (i=9,10)
-  eEdge: number;    // cumulative energy at edges (i=0,1,2,17,18,19)
+  eCenter: number;  // energy at center nodes
+  eEdge: number;    // energy at edge nodes
 }
 
 interface Props {
