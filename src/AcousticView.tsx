@@ -95,7 +95,7 @@ export default function AcousticView({ state, params }: Props) {
     ctx.font = '9px monospace';
     ctx.fillText('◀ Speaker 1', pad, H - pad + 14);
     ctx.fillText('Speaker 2 ▶', W - pad - 60, H - pad + 14);
-    ctx.fillText(`t = ${state.time.toFixed(3)}s`, W - pad - 60, pad - 6);
+    ctx.fillText(`t = ${(state.time*1000).toFixed(2)} ms`, W - pad - 80, pad - 6);
 
     // Scale markers
     ctx.fillStyle = 'rgba(255,255,255,0.3)';

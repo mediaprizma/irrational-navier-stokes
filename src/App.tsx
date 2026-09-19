@@ -21,8 +21,8 @@ export default function App() {
   // Irrational: R = 1.475482818459
   const [irrParams, setIrrParams] = useState<AcousticParams>({
     N: 200,
-    L: 2.0,
-    f1: 1000.0,
+    L: 3.0,
+    f1: 3050.0,
     R: 1.475482818459,
     amplitude: 20.0,
     amplitudeRatio: 1.0,
@@ -33,8 +33,8 @@ export default function App() {
   // Harmonic: R = 2.0
   const [harmParams, setHarmParams] = useState<AcousticParams>({
     N: 200,
-    L: 2.0,
-    f1: 1000.0,
+    L: 3.0,
+    f1: 3050.0,
     R: 2.0,
     amplitude: 20.0,
     amplitudeRatio: 1.0,
@@ -130,8 +130,8 @@ export default function App() {
 
   const handleReset = () => {
     setIsRunning(false);
-    const resetIrr = { ...irrParams, f1: 1000.0, amplitude: 20.0, amplitudeRatio: 1.0, temperature: 293.0 };
-    const resetHarm = { ...harmParams, f1: 1000.0, amplitude: 20.0, amplitudeRatio: 1.0, temperature: 293.0 };
+    const resetIrr = { ...irrParams, f1: 3050.0, L: 3.0, amplitude: 20.0, amplitudeRatio: 1.0, temperature: 293.0 };
+    const resetHarm = { ...harmParams, f1: 3050.0, L: 3.0, amplitude: 20.0, amplitudeRatio: 1.0, temperature: 293.0 };
     setIrrParams(resetIrr);
     setHarmParams(resetHarm);
     const irrNew = createInitialAcousticState(resetIrr);
@@ -184,7 +184,7 @@ export default function App() {
             <div className="text-[10px] text-cyan-400 font-bold mb-2">IRRATIONAL — Base Frequency f₁</div>
             <div className="flex items-center gap-2">
               <input
-                type="range" min="100" max="5000" step="50"
+                type="range" min="100" max="10000" step="50"
                 value={irrParams.f1}
                 onChange={(e) => setIrrParams(p => ({ ...p, f1: parseFloat(e.target.value) }))}
                 className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
@@ -195,7 +195,7 @@ export default function App() {
               f₁ = {fmtFixed(irrParams.f1, 0)} Hz | f₂ = {fmtFixed(irrF2, 0)} Hz | R = {irrParams.R.toFixed(4)}
             </div>
             <div className="text-[9px] text-cyan-600 mt-1">
-              λ₁ = {fmtFixed(343 / irrParams.f1, 3)} m | λ₂ = {fmtFixed(343 / irrF2, 3)} m
+              λ₁ = {fmtFixed(343 / irrParams.f1, 3)} m | λ₂ = {fmtFixed(343 / irrF2, 3)} m | T₁ = {fmtFixed(1000 / irrParams.f1, 2)} ms
             </div>
             
             <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">AMPLITUDE (Sound Pressure)</div>
@@ -253,7 +253,7 @@ export default function App() {
             <div className="text-[10px] text-purple-400 font-bold mb-2">HARMONIC — Base Frequency f₁</div>
             <div className="flex items-center gap-2">
               <input
-                type="range" min="100" max="5000" step="50"
+                type="range" min="100" max="10000" step="50"
                 value={harmParams.f1}
                 onChange={(e) => setHarmParams(p => ({ ...p, f1: parseFloat(e.target.value) }))}
                 className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
@@ -264,7 +264,7 @@ export default function App() {
               f₁ = {fmtFixed(harmParams.f1, 0)} Hz | f₂ = {fmtFixed(harmF2, 0)} Hz | R = 2.0
             </div>
             <div className="text-[9px] text-purple-600 mt-1">
-              λ₁ = {fmtFixed(343 / harmParams.f1, 3)} m | λ₂ = {fmtFixed(343 / harmF2, 3)} m
+              λ₁ = {fmtFixed(343 / harmParams.f1, 3)} m | λ₂ = {fmtFixed(343 / harmF2, 3)} m | T₁ = {fmtFixed(1000 / harmParams.f1, 2)} ms
             </div>
             
             <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">AMPLITUDE (Sound Pressure)</div>
@@ -324,7 +324,7 @@ export default function App() {
           <section className="bg-[#0a0a1a] rounded-lg border-2 border-cyan-900/50 p-3">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-xs font-bold text-cyan-400">⚡ IRRATIONAL — R = {irrParams.R.toFixed(4)}</h2>
-              <div className="text-[10px] text-gray-500">Peak: {fmtFixed(pressureToDb(irrMaxPeak), 1)} dB</div>
+              <div className="text-[10px] text-gray-500">Peak: {fmtFixed(pressureToDb(irrMaxPeak), 1)} dB | t = {(irrState.time*1000).toFixed(1)} ms</div>
             </div>
             <div className="text-[9px] text-gray-500 mb-1">
               Speaker 1: f₁+f₂ → ← f₁+f₂ Speaker 2 | Distance: {fmtFixed(irrParams.L, 1)} m
@@ -335,7 +335,7 @@ export default function App() {
           <section className="bg-[#0a0a1a] rounded-lg border-2 border-purple-900/50 p-3">
             <div className="flex items-center justify-between mb-2">
               <h2 className="text-xs font-bold text-purple-400">∿ HARMONIC — R = 2.0</h2>
-              <div className="text-[10px] text-gray-500">Peak: {fmtFixed(pressureToDb(harmMaxPeak), 1)} dB</div>
+              <div className="text-[10px] text-gray-500">Peak: {fmtFixed(pressureToDb(harmMaxPeak), 1)} dB | t = {(harmState.time*1000).toFixed(1)} ms</div>
             </div>
             <div className="text-[9px] text-gray-500 mb-1">
               Speaker 1: f₁+f₂ → ← f₁+f₂ Speaker 2 | Distance: {fmtFixed(harmParams.L, 1)} m

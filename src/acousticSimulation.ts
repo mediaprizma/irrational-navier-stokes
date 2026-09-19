@@ -51,8 +51,8 @@ export interface AcousticState {
 
 export const DEFAULT_ACOUSTIC_PARAMS: AcousticParams = {
   N: 200,
-  L: 2.0,              // 2 meters between speakers
-  f1: 1000.0,          // 1 kHz base frequency
+  L: 3.0,              // 3 meters between speakers
+  f1: 3050.0,          // 3050 Hz base frequency
   R: 1.475482818459,
   amplitude: 20.0,     // 20 Pa (~120 dB SPL)
   amplitudeRatio: 1.0, // Equal amplitude for both frequencies

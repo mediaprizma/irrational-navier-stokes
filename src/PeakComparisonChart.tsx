@@ -48,7 +48,7 @@ export default function PeakComparisonChart({ irrHistory, harmHistory, irrMax, h
     ctx.fillStyle = '#ffffff';
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('Center Peak Pressure Over Time', W / 2, 20);
+    ctx.fillText('Center Peak Pressure Over Time (Acoustic Waves)', W / 2, 20);
 
     if (irrHistory.length < 2 && harmHistory.length < 2) {
       ctx.fillStyle = 'rgba(255,255,255,0.3)';
@@ -158,9 +158,9 @@ export default function PeakComparisonChart({ irrHistory, harmHistory, irrMax, h
     ctx.fillStyle = 'rgba(255,255,255,0.4)';
     ctx.font = '9px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(`t=${t0.toFixed(3)}s`, pad.left, H - pad.bottom + 14);
-    ctx.fillText(`t=${t1.toFixed(3)}s`, W - pad.right - 20, H - pad.bottom + 14);
-    ctx.fillText('Time →', pad.left + plotW / 2, H - 8);
+    ctx.fillText(`t=${(t0*1000).toFixed(1)}ms`, pad.left, H - pad.bottom + 14);
+    ctx.fillText(`t=${(t1*1000).toFixed(1)}ms`, W - pad.right - 20, H - pad.bottom + 14);
+    ctx.fillText('Time (milliseconds) →', pad.left + plotW / 2, H - 8);
 
     ctx.save();
     ctx.translate(12, pad.top + plotH / 2);
