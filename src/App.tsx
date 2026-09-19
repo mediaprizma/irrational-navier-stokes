@@ -42,6 +42,7 @@ export default function App() {
   const [irrParams, setIrrParams] = useState<SimulationParams>({
     ...DEFAULT_PARAMS,
     mode: 'irrational',
+    R: 1.475482818459,
     leftFreq1Enabled: true,
     leftFreq2Enabled: true,
     rightFreq1Enabled: true,
@@ -50,6 +51,7 @@ export default function App() {
   const [harmParams, setHarmParams] = useState<SimulationParams>({
     ...DEFAULT_PARAMS,
     mode: 'harmonic',
+    R: 2.0,
     leftFreq1Enabled: true,
     leftFreq2Enabled: true,
     rightFreq1Enabled: true,
@@ -252,6 +254,25 @@ export default function App() {
               </div>
             </div>
             
+            {/* Base frequency control for Irrational */}
+            <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30 mb-2">
+              <div className="text-[9px] text-cyan-400 font-bold mb-1">BASE FREQUENCY f₁</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min="10"
+                  max="100"
+                  step="1"
+                  value={irrParams.omega1}
+                  onChange={(e) => setIrrParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
+                  className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                />
+                <span className="text-[10px] text-cyan-300 font-mono w-20">
+                  {fmtFixed(omegaToGHz(irrParams.omega1), 2)} GHz
+                </span>
+              </div>
+            </div>
+            
             {/* Frequency controls for Irrational */}
             <div className="grid grid-cols-2 gap-2 mb-2">
               <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
@@ -389,6 +410,25 @@ export default function App() {
                 harmGain > 1.5 ? 'bg-red-900/50 text-red-300 border border-red-700' : 'bg-gray-800 text-gray-500'
               }`}>
                 K = {fmtFixed(harmGain, 2)}×
+              </div>
+            </div>
+            
+            {/* Base frequency control for Harmonic */}
+            <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30 mb-2">
+              <div className="text-[9px] text-purple-400 font-bold mb-1">BASE FREQUENCY f₁</div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="range"
+                  min="10"
+                  max="100"
+                  step="1"
+                  value={harmParams.omega1}
+                  onChange={(e) => setHarmParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
+                  className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                />
+                <span className="text-[10px] text-purple-300 font-mono w-20">
+                  {fmtFixed(omegaToGHz(harmParams.omega1), 2)} GHz
+                </span>
               </div>
             </div>
 
