@@ -1,6 +1,6 @@
 // Discrete LC-chain electromagnetic simulation engine
 // Implements the discrete telegraph equation with irrational spectral pumping
-// All functions are NaN-safe to prevent cascade failures.
+// Tracks both node voltages AND inter-node currents for traveling-wave decomposition.
 
 export interface SimulationParams {
   N: number;
@@ -14,9 +14,13 @@ export interface SimulationParams {
 }
 
 export interface SimulationState {
-  voltages: Float64Array;
+  voltages: Float64Array;   // V_i for each node (length N)
+  currents: Float64Array;   // I_i = current from node i to node i+1 (length N-1)
   time: number;
-  energies: Float64Array;
+  energies: Float64Array;   // E_i = V_i^2
+  // Traveling wave decomposition (computed on the fly)
+  vRight: Float64Array;     // V⁺ rightward wave at each node
+  vLeft: Float64Array;      // V⁻ leftward wave at each node
 }
 
 export const DEFAULT_PARAMS: SimulationParams = {
@@ -32,7 +36,6 @@ export const DEFAULT_PARAMS: SimulationParams = {
 
 // ─── NaN-safe helpers ────────────────────────────────────────────────────────
 
-/** Replace NaN / ±Infinity with 0 in a Float64Array (in-place). */
 function sanitizeArray(arr: Float64Array): Float64Array {
   for (let i = 0; i < arr.length; i++) {
     if (!Number.isFinite(arr[i])) arr[i] = 0;
@@ -40,19 +43,18 @@ function sanitizeArray(arr: Float64Array): Float64Array {
   return arr;
 }
 
-/** Clamp a scalar to a safe finite value. */
 function safeNum(v: number, fallback = 0): number {
   return Number.isFinite(v) ? v : fallback;
 }
 
 // ─── Boundary voltage sources ────────────────────────────────────────────────
 
-function boundaryVoltageLeft(t: number, p: SimulationParams): number {
+export function boundaryVoltageLeft(t: number, p: SimulationParams): number {
   const omega2 = p.mode === 'irrational' ? p.R * p.omega1 : 2.0 * p.omega1;
   return (p.amplitude / 2.0) * (Math.sin(p.omega1 * t) + Math.sin(omega2 * t));
 }
 
-function boundaryVoltageRight(t: number, p: SimulationParams): number {
+export function boundaryVoltageRight(t: number, p: SimulationParams): number {
   const omega2 = p.mode === 'irrational' ? p.R * p.omega1 : 2.0 * p.omega1;
   return (p.amplitude / 2.0) * (
     Math.sin(p.omega1 * t + Math.PI) + Math.sin(omega2 * t + Math.PI)
@@ -60,89 +62,155 @@ function boundaryVoltageRight(t: number, p: SimulationParams): number {
 }
 
 // ─── ODE right-hand side ─────────────────────────────────────────────────────
+// State vector: [V_1, V_2, ..., V_{N-2}, I_0, I_1, ..., I_{N-2}]
+// where I_i is current through inductor from node i to node i+1.
+//
+// Equations:
+//   C dV_i/dt = I_{i-1} - I_i - G V_i    (KCL at node i)
+//   L dI_i/dt = V_i - V_{i+1}             (KVL across inductor i→i+1)
+//
+// Boundary: V_0 and V_{N-1} are driven sources.
 
 function computeDerivatives(
   V: Float64Array,
+  I: Float64Array,
   t: number,
   p: SimulationParams,
-): Float64Array {
+): { dV: Float64Array; dI: Float64Array } {
   const { N, L, C, G } = p;
   const dV = new Float64Array(N);
-  // Boundary nodes are Dirichlet-driven → derivative forced to 0
-  dV[0] = 0;
-  dV[N - 1] = 0;
+  const dI = new Float64Array(N - 1);
 
-  const invL = 1.0 / L;
   const invC = 1.0 / C;
+  const invL = 1.0 / L;
 
+  // KCL at internal nodes
   for (let i = 1; i < N - 1; i++) {
-    const iL = (V[i - 1] - V[i]) * invL + (V[i + 1] - V[i]) * invL;
-    dV[i] = (iL - G * V[i]) * invC;
+    const iLeft = I[i - 1];   // current flowing INTO node i from left
+    const iRight = I[i];      // current flowing OUT of node i to right
+    dV[i] = (iLeft - iRight - G * V[i]) * invC;
   }
-  return dV;
+
+  // KVL across each inductor
+  for (let i = 0; i < N - 1; i++) {
+    dI[i] = (V[i] - V[i + 1]) * invL;
+  }
+
+  return { dV, dI };
 }
 
-// ─── RK4 integrator with NaN guard ──────────────────────────────────────────
+// ─── RK4 integrator ─────────────────────────────────────────────────────────
 
 export function rk4Step(
   V: Float64Array,
+  I: Float64Array,
   t: number,
   dt: number,
   p: SimulationParams,
-): Float64Array {
+): { V: Float64Array; I: Float64Array } {
   const N = p.N;
-  const result = new Float64Array(N);
+  const nI = N - 1;
 
-  const k1 = computeDerivatives(V, t, p);
+  const k1 = computeDerivatives(V, I, t, p);
 
-  // ── k2 ──
+  // k2
   const v2 = new Float64Array(N);
-  for (let i = 0; i < N; i++) v2[i] = V[i] + 0.5 * dt * k1[i];
+  const i2 = new Float64Array(nI);
+  for (let j = 0; j < N; j++) v2[j] = V[j] + 0.5 * dt * k1.dV[j];
+  for (let j = 0; j < nI; j++) i2[j] = I[j] + 0.5 * dt * k1.dI[j];
   v2[0] = boundaryVoltageLeft(t + 0.5 * dt, p);
   v2[N - 1] = boundaryVoltageRight(t + 0.5 * dt, p);
-  const k2 = computeDerivatives(v2, t + 0.5 * dt, p);
+  const k2 = computeDerivatives(v2, i2, t + 0.5 * dt, p);
 
-  // ── k3 ──
+  // k3
   const v3 = new Float64Array(N);
-  for (let i = 0; i < N; i++) v3[i] = V[i] + 0.5 * dt * k2[i];
+  const i3 = new Float64Array(nI);
+  for (let j = 0; j < N; j++) v3[j] = V[j] + 0.5 * dt * k2.dV[j];
+  for (let j = 0; j < nI; j++) i3[j] = I[j] + 0.5 * dt * k2.dI[j];
   v3[0] = boundaryVoltageLeft(t + 0.5 * dt, p);
   v3[N - 1] = boundaryVoltageRight(t + 0.5 * dt, p);
-  const k3 = computeDerivatives(v3, t + 0.5 * dt, p);
+  const k3 = computeDerivatives(v3, i3, t + 0.5 * dt, p);
 
-  // ── k4 ──
+  // k4
   const v4 = new Float64Array(N);
-  for (let i = 0; i < N; i++) v4[i] = V[i] + dt * k3[i];
+  const i4 = new Float64Array(nI);
+  for (let j = 0; j < N; j++) v4[j] = V[j] + dt * k3.dV[j];
+  for (let j = 0; j < nI; j++) i4[j] = I[j] + dt * k3.dI[j];
   v4[0] = boundaryVoltageLeft(t + dt, p);
   v4[N - 1] = boundaryVoltageRight(t + dt, p);
-  const k4 = computeDerivatives(v4, t + dt, p);
+  const k4 = computeDerivatives(v4, i4, t + dt, p);
 
-  // ── Combine ──
+  // Combine
+  const newV = new Float64Array(N);
+  const newI = new Float64Array(nI);
   const dt6 = dt / 6.0;
-  for (let i = 0; i < N; i++) {
-    result[i] = V[i] + dt6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
+
+  for (let j = 0; j < N; j++) {
+    newV[j] = V[j] + dt6 * (k1.dV[j] + 2 * k2.dV[j] + 2 * k3.dV[j] + k4.dV[j]);
+  }
+  for (let j = 0; j < nI; j++) {
+    newI[j] = I[j] + dt6 * (k1.dI[j] + 2 * k2.dI[j] + 2 * k3.dI[j] + k4.dI[j]);
   }
 
   // Enforce Dirichlet boundaries
-  result[0] = boundaryVoltageLeft(t + dt, p);
-  result[N - 1] = boundaryVoltageRight(t + dt, p);
+  newV[0] = boundaryVoltageLeft(t + dt, p);
+  newV[N - 1] = boundaryVoltageRight(t + dt, p);
 
-  // ── NaN / Infinity guard ──
-  sanitizeArray(result);
+  // NaN / Infinity guard
+  sanitizeArray(newV);
+  sanitizeArray(newI);
 
-  // ── Blow-up guard: if any voltage exceeds a physical limit, clamp ──
+  // Blow-up guard
   const VMAX = 1e6;
-  for (let i = 0; i < N; i++) {
-    if (result[i] > VMAX) result[i] = VMAX;
-    else if (result[i] < -VMAX) result[i] = -VMAX;
+  const IMAX = 1e6;
+  for (let j = 0; j < N; j++) {
+    if (newV[j] > VMAX) newV[j] = VMAX;
+    else if (newV[j] < -VMAX) newV[j] = -VMAX;
+  }
+  for (let j = 0; j < nI; j++) {
+    if (newI[j] > IMAX) newI[j] = IMAX;
+    else if (newI[j] < -IMAX) newI[j] = -IMAX;
   }
 
-  return result;
+  return { V: newV, I: newI };
+}
+
+// ─── Traveling wave decomposition ────────────────────────────────────────────
+// V⁺_i = (V_i + Z * I_i) / 2   (rightward wave, using current INTO node from left)
+// V⁻_i = (V_i - Z * I_i) / 2   (leftward wave)
+// where Z = sqrt(L/C) is characteristic impedance.
+// At boundaries we extrapolate from nearest internal node.
+
+function computeTravelingWaves(
+  V: Float64Array,
+  I: Float64Array,
+  p: SimulationParams,
+): { vRight: Float64Array; vLeft: Float64Array } {
+  const N = p.N;
+  const Z = Math.sqrt(p.L / p.C);
+  const vR = new Float64Array(N);
+  const vL = new Float64Array(N);
+
+  for (let i = 0; i < N; i++) {
+    // Use the current on the inductor to the right of node i (or left for last node)
+    let iLocal: number;
+    if (i < N - 1) {
+      iLocal = I[i]; // current flowing right from node i
+    } else {
+      iLocal = I[N - 2]; // extrapolate from last inductor
+    }
+    vR[i] = (V[i] + Z * iLocal) / 2;
+    vL[i] = (V[i] - Z * iLocal) / 2;
+  }
+
+  return { vRight: vR, vLeft: vL };
 }
 
 // ─── State factory ───────────────────────────────────────────────────────────
 
 export function createInitialState(p: SimulationParams): SimulationState {
   const voltages = new Float64Array(p.N);
+  const currents = new Float64Array(p.N - 1);
   const energies = new Float64Array(p.N);
 
   voltages[0] = boundaryVoltageLeft(0, p);
@@ -150,7 +218,9 @@ export function createInitialState(p: SimulationParams): SimulationState {
 
   for (let i = 0; i < p.N; i++) energies[i] = voltages[i] * voltages[i];
 
-  return { voltages, time: 0, energies };
+  const waves = computeTravelingWaves(voltages, currents, p);
+
+  return { voltages, currents, time: 0, energies, vRight: waves.vRight, vLeft: waves.vLeft };
 }
 
 // ─── Time advance ────────────────────────────────────────────────────────────
@@ -163,15 +233,18 @@ export function advanceSimulation(
 ): SimulationState {
   const dt = dtTotal / subSteps;
   let V = state.voltages;
+  let I = state.currents;
   let t = state.time;
 
   for (let s = 0; s < subSteps; s++) {
-    V = rk4Step(V, t, dt, p);
+    const result = rk4Step(V, I, t, dt, p);
+    V = result.V;
+    I = result.I;
     t += dt;
-    // Safety: if time itself went NaN, bail out
     if (!Number.isFinite(t)) {
       t = state.time;
       V = state.voltages;
+      I = state.currents;
       break;
     }
   }
@@ -179,33 +252,25 @@ export function advanceSimulation(
   const energies = new Float64Array(p.N);
   for (let i = 0; i < p.N; i++) energies[i] = V[i] * V[i];
 
-  return { voltages: V, time: t, energies };
+  const waves = computeTravelingWaves(V, I, p);
+
+  return { voltages: V, currents: I, time: t, energies, vRight: waves.vRight, vLeft: waves.vLeft };
 }
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
 
-/**
- * Gain coefficient K = max(E_center) / avg(E_edge).
- * Fully NaN-safe: returns 1.0 when both are zero / undefined.
- */
 export function computeGainCoefficient(energies: Float64Array, N: number): number {
   const eCenter = Math.max(safeNum(energies[9]), safeNum(energies[10]));
-
   const edgeIdx = [0, 1, 2, N - 3, N - 2, N - 1];
   let eEdge = 0;
   for (const i of edgeIdx) eEdge += safeNum(energies[i]);
   eEdge /= edgeIdx.length;
-
-  // Both zero → no meaningful ratio
   if (eEdge < 1e-15 && eCenter < 1e-15) return 1.0;
-  // Edge effectively zero but center has energy → high gain
   if (eEdge < 1e-15) return 100.0;
-  // Normal case
   const ratio = eCenter / eEdge;
   return Number.isFinite(ratio) ? ratio : 1.0;
 }
 
-/** Safe max of a Float64Array (returns 0 for empty / all-NaN). */
 export function safeMax(arr: Float64Array): number {
   let m = 0;
   for (let i = 0; i < arr.length; i++) {
@@ -215,7 +280,6 @@ export function safeMax(arr: Float64Array): number {
   return m;
 }
 
-/** Safe sum of a Float64Array. */
 export function safeSum(arr: Float64Array): number {
   let s = 0;
   for (let i = 0; i < arr.length; i++) {

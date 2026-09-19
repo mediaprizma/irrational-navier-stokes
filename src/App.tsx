@@ -13,7 +13,7 @@ import Oscilloscope from './Oscilloscope';
 import Waterfall from './Waterfall';
 import Spectrum from './Spectrum';
 
-// ─── Ring buffer for oscilloscope samples ────────────────────────────────────
+// ─── Ring buffer ─────────────────────────────────────────────────────────────
 
 class RingBuffer {
   data: Float32Array;
@@ -44,42 +44,26 @@ function energyToColor(energy: number, maxEnergy: number): string {
     return 'rgb(5,5,40)';
   }
   const t = Math.min(Math.pow(energy / maxEnergy, 0.5), 1.0);
-
   let r: number, g: number, b: number;
-  if (t < 0.2) {
-    const s = t / 0.2; r = 5 + 10 * s; g = 5 + 20 * s; b = 40 + 120 * s;
-  } else if (t < 0.4) {
-    const s = (t - 0.2) / 0.2; r = 15 + 10 * s; g = 25 + 100 * s; b = 160 + 95 * s;
-  } else if (t < 0.6) {
-    const s = (t - 0.4) / 0.2; r = 25 + 100 * s; g = 125 + 105 * s; b = 255 - 55 * s;
-  } else if (t < 0.8) {
-    const s = (t - 0.6) / 0.2; r = 125 + 130 * s; g = 230 - 30 * s; b = 200 - 150 * s;
-  } else {
-    const s = (t - 0.8) / 0.2; r = 255; g = 200 + 55 * s; b = 50 + 205 * s;
-  }
+  if (t < 0.2) { const s = t / 0.2; r = 5 + 10 * s; g = 5 + 20 * s; b = 40 + 120 * s; }
+  else if (t < 0.4) { const s = (t - 0.2) / 0.2; r = 15 + 10 * s; g = 25 + 100 * s; b = 160 + 95 * s; }
+  else if (t < 0.6) { const s = (t - 0.4) / 0.2; r = 25 + 100 * s; g = 125 + 105 * s; b = 255 - 55 * s; }
+  else if (t < 0.8) { const s = (t - 0.6) / 0.2; r = 125 + 130 * s; g = 230 - 30 * s; b = 200 - 150 * s; }
+  else { const s = (t - 0.8) / 0.2; r = 255; g = 200 + 55 * s; b = 50 + 205 * s; }
   return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
 }
 
-// ─── Format helpers ──────────────────────────────────────────────────────────
-
-function fmtSci(v: number): string {
-  if (!Number.isFinite(v)) return '0.00e+0';
-  return v.toExponential(2);
-}
-
-function fmtFixed(v: number, d = 2): string {
-  if (!Number.isFinite(v)) return '—';
-  return v.toFixed(d);
-}
+function fmtSci(v: number): string { return Number.isFinite(v) ? v.toExponential(2) : '0.00e+0'; }
+function fmtFixed(v: number, d = 2): string { return Number.isFinite(v) ? v.toFixed(d) : '—'; }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const SIM_DT = 0.003;
 const SUB_STEPS = 5;
-const SCOPE_SIZE = 512;          // Oscilloscope buffer length
-const SCOPE_SAMPLE_INTERVAL = 0.001; // Sample every 1ms of sim time (1 kHz)
-const WATERFALL_ROWS = 150;      // Number of time rows in waterfall
-const WATERFALL_SAMPLE_INTERVAL = 0.005; // New waterfall row every 5ms
+const SCOPE_SIZE = 512;
+const SCOPE_SAMPLE_INTERVAL = 0.001;
+const WATERFALL_ROWS = 150;
+const WATERFALL_SAMPLE_INTERVAL = 0.005;
 
 // ─── Main App ────────────────────────────────────────────────────────────────
 
@@ -89,17 +73,22 @@ export default function App() {
   const [state, setState] = useState<SimulationState>(() => createInitialState(DEFAULT_PARAMS));
   const [gainCoeff, setGainCoeff] = useState(1.0);
   const [maxEnergyHistory, setMaxEnergyHistory] = useState<{ t: number; e: number }[]>([]);
+  const [, setScopeTick] = useState(0);
 
-  // Oscilloscope buffers (stored in refs so they don't trigger re-render on every sample)
+  // Oscilloscope buffers for total voltage
   const scopeLeftRef = useRef(new RingBuffer(SCOPE_SIZE));
   const scopeCenterRef = useRef(new RingBuffer(SCOPE_SIZE));
   const scopeRightRef = useRef(new RingBuffer(SCOPE_SIZE));
 
+  // Oscilloscope buffers for traveling waves
+  const scopeVRightRef = useRef(new RingBuffer(SCOPE_SIZE));   // V⁺ rightward
+  const scopeVLeftRef = useRef(new RingBuffer(SCOPE_SIZE));    // V⁻ leftward
+
   // Waterfall history
   const waterfallRef = useRef<Float32Array[]>([]);
 
-  // Force re-render of oscilloscopes periodically
-  const [scopeTick, setScopeTick] = useState(0);
+  // Pulse animation state
+  const [pulsePhase, setPulsePhase] = useState(0);
 
   const stateRef = useRef(state);
   const paramsRef = useRef(params);
@@ -121,7 +110,6 @@ export default function App() {
     const now = performance.now();
     const realDt = lastTimeRef.current ? (now - lastTimeRef.current) / 1000 : 0;
     lastTimeRef.current = now;
-
     accumulatorRef.current += Math.min(realDt, 0.05);
 
     let currentState = stateRef.current;
@@ -133,15 +121,18 @@ export default function App() {
       accumulatorRef.current -= SIM_DT;
       stepsThisFrame++;
 
-      // Sample oscilloscopes at fixed sim-time intervals
+      // Sample oscilloscopes
       if (currentState.time - lastScopeSampleTime.current >= SCOPE_SAMPLE_INTERVAL) {
         lastScopeSampleTime.current = currentState.time;
         scopeLeftRef.current.push(currentState.voltages[0]);
         scopeCenterRef.current.push(currentState.voltages[9]);
         scopeRightRef.current.push(currentState.voltages[paramsRef.current.N - 1]);
+        // Traveling waves at center node
+        scopeVRightRef.current.push(currentState.vRight[9]);
+        scopeVLeftRef.current.push(currentState.vLeft[9]);
       }
 
-      // Sample waterfall at fixed intervals
+      // Sample waterfall
       if (currentState.time - lastWaterfallTime.current >= WATERFALL_SAMPLE_INTERVAL) {
         lastWaterfallTime.current = currentState.time;
         const snapshot = new Float32Array(paramsRef.current.N);
@@ -149,9 +140,7 @@ export default function App() {
           snapshot[i] = Number.isFinite(currentState.voltages[i]) ? currentState.voltages[i] : 0;
         }
         waterfallRef.current.push(snapshot);
-        if (waterfallRef.current.length > WATERFALL_ROWS) {
-          waterfallRef.current.shift();
-        }
+        if (waterfallRef.current.length > WATERFALL_ROWS) waterfallRef.current.shift();
       }
     }
 
@@ -171,8 +160,9 @@ export default function App() {
             return next;
           });
         }
-        // Trigger oscilloscope re-render
         setScopeTick(t => t + 1);
+        // Pulse animation
+        setPulsePhase(p => (p + 1) % 100);
       }
     }
 
@@ -187,9 +177,7 @@ export default function App() {
     } else {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     }
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    };
+    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
   }, [isRunning, simulationLoop]);
 
   const handleReset = () => {
@@ -206,7 +194,10 @@ export default function App() {
     scopeLeftRef.current.reset();
     scopeCenterRef.current.reset();
     scopeRightRef.current.reset();
+    scopeVRightRef.current.reset();
+    scopeVLeftRef.current.reset();
     waterfallRef.current = [];
+    setPulsePhase(0);
   };
 
   const handleModeChange = (mode: 'irrational' | 'harmonic') => {
@@ -218,7 +209,6 @@ export default function App() {
   const localizationActive = Number.isFinite(gainCoeff) && gainCoeff > 2.0;
   const maxEnergy = safeMax(state.energies);
   const omega2 = params.mode === 'irrational' ? params.R * params.omega1 : 2.0 * params.omega1;
-
   const centerEnergy = Math.max(
     Number.isFinite(state.energies[9]) ? state.energies[9] : 0,
     Number.isFinite(state.energies[10]) ? state.energies[10] : 0,
@@ -231,7 +221,6 @@ export default function App() {
     return s / idx.length;
   })();
 
-  // SVG history
   const historySvgPoints = (() => {
     if (maxEnergyHistory.length < 2) return '';
     const histMax = Math.max(...maxEnergyHistory.map(h => Number.isFinite(h.e) ? h.e : 0), 1e-10);
@@ -252,11 +241,18 @@ export default function App() {
     return `0,100 ${pts} ${maxEnergyHistory.length - 1},100`;
   })();
 
-  // Sample rate for spectrum = 1 / SCOPE_SAMPLE_INTERVAL = 1000 Hz
   const scopeSampleRate = 1 / SCOPE_SAMPLE_INTERVAL;
 
-  // Suppress unused warning
-  void scopeTick;
+  // ─── Pulse animation positions (for wave direction indicators) ─────────────
+  // Pulses travel from left boundary → center and right boundary → center
+  const leftPulses = [0, 1, 2, 3].map(k => {
+    const phase = ((pulsePhase + k * 25) % 100) / 100;
+    return phase * 0.45; // 0 to 0.45 (left half of line)
+  });
+  const rightPulses = [0, 1, 2, 3].map(k => {
+    const phase = ((pulsePhase + k * 25) % 100) / 100;
+    return 1.0 - phase * 0.45; // 1.0 to 0.55 (right half of line)
+  });
 
   return (
     <div className="min-h-screen bg-[#050510] text-white font-mono overflow-x-hidden">
@@ -268,154 +264,218 @@ export default function App() {
               ⚡ LC-Chain EM Simulator
             </h1>
             <p className="text-[10px] sm:text-xs text-gray-500 mt-0.5">
-              Real-time irrational spectral pumping • Wave propagation • Energy localization
+              Counter-propagating waves • Irrational spectral pumping • Energy localization
             </p>
           </div>
           <div className="flex items-center gap-2">
             <div className={`hidden sm:block px-2 py-1 rounded text-[10px] font-bold ${
               isRunning ? 'bg-green-900/50 text-green-400' : 'bg-gray-800 text-gray-500'
-            }`}>
-              {isRunning ? '● RUNNING' : '○ STOPPED'}
-            </div>
-            <button
-              onClick={() => setIsRunning(!isRunning)}
+            }`}>{isRunning ? '● RUNNING' : '○ STOPPED'}</div>
+            <button onClick={() => setIsRunning(!isRunning)}
               className={`px-3 sm:px-4 py-2 rounded-lg font-bold text-xs transition-all ${
-                isRunning
-                  ? 'bg-yellow-600 hover:bg-yellow-500 text-black shadow-lg shadow-yellow-600/20'
-                  : 'bg-cyan-600 hover:bg-cyan-500 text-white shadow-lg shadow-cyan-600/20'
-              }`}
-            >
-              {isRunning ? '⏸ Pause' : '▶ Start'}
-            </button>
-            <button
-              onClick={handleReset}
-              className="px-3 sm:px-4 py-2 rounded-lg font-bold text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700 transition-all"
-            >
-              ↺ Reset
-            </button>
+                isRunning ? 'bg-yellow-600 hover:bg-yellow-500 text-black' : 'bg-cyan-600 hover:bg-cyan-500 text-white'
+              }`}>{isRunning ? '⏸ Pause' : '▶ Start'}</button>
+            <button onClick={handleReset}
+              className="px-3 sm:px-4 py-2 rounded-lg font-bold text-xs bg-gray-800 hover:bg-gray-700 border border-gray-700">↺ Reset</button>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-4 space-y-4">
-        {/* ── Real-time Oscilloscopes ── */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            📡 Real-Time Oscilloscopes — Voltage V(t) at Key Nodes
+
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {/* COUNTER-PROPAGATING WAVES VISUALIZATION                            */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        <section className="bg-[#0a0a1a] rounded-xl border border-cyan-900/30 p-4">
+          <h2 className="text-xs font-bold text-cyan-400 uppercase tracking-wider mb-1">
+            ↗↖ Counter-Propagating Waves — V⁺ (rightward) &amp; V⁻ (leftward)
           </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <p className="text-[10px] text-gray-500 mb-3">
+            Left source launches V⁺ → rightward &nbsp;|&nbsp; Right source launches V⁻ ← leftward &nbsp;|&nbsp;
+            They meet and interfere at the center
+          </p>
+
+          {/* Animated line with directional pulses */}
+          <div className="relative bg-gray-900/50 rounded-lg p-4 border border-gray-800/30 mb-4">
+            {/* Direction arrows background */}
+            <div className="absolute inset-0 flex items-center pointer-events-none overflow-hidden rounded-lg">
+              {/* Left-to-right gradient arrow */}
+              <div className="absolute left-4 top-1/2 -translate-y-1/2 w-[40%] h-6 flex items-center">
+                <div className="flex-1 h-[2px] bg-gradient-to-r from-cyan-500/40 to-transparent" />
+                <div className="text-cyan-400 text-lg animate-pulse">▶</div>
+              </div>
+              {/* Right-to-left gradient arrow */}
+              <div className="absolute right-4 top-1/2 -translate-y-1/2 w-[40%] h-6 flex items-center justify-end">
+                <div className="text-purple-400 text-lg animate-pulse">◀</div>
+                <div className="flex-1 h-[2px] bg-gradient-to-l from-purple-500/40 to-transparent" />
+              </div>
+            </div>
+
+            {/* The LC chain with animated pulses */}
+            <div className="relative flex items-center justify-between px-6 py-6 min-h-[80px]">
+              {/* Connection line */}
+              <div className="absolute top-1/2 left-6 right-6 h-0.5 bg-gray-700/50 -translate-y-1/2" />
+
+              {/* Animated pulses traveling left→right (cyan) */}
+              {leftPulses.map((pos, k) => (
+                <div key={`lp-${k}`}
+                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-cyan-400 opacity-70 blur-[1px] transition-none"
+                  style={{ left: `${6 + pos * 88}%` }}
+                />
+              ))}
+              {/* Animated pulses traveling right→left (purple) */}
+              {rightPulses.map((pos, k) => (
+                <div key={`rp-${k}`}
+                  className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-purple-400 opacity-70 blur-[1px] transition-none"
+                  style={{ left: `${6 + pos * 88}%` }}
+                />
+              ))}
+
+              {/* Nodes */}
+              {Array.from(state.voltages).map((_, i) => {
+                const isCenter = i === 9 || i === 10;
+                const energy = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
+                const color = energyToColor(energy, maxEnergy);
+                return (
+                  <div key={i} className="relative z-10 flex flex-col items-center">
+                    <div className={`w-3 h-3 rounded-full border ${
+                      isCenter ? 'border-yellow-400 ring-2 ring-yellow-400/40' : 'border-gray-600'
+                    }`} style={{ backgroundColor: color }} />
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Boundary labels with arrows */}
+            <div className="flex justify-between items-center mt-1">
+              <div className="flex items-center gap-1">
+                <span className="text-cyan-400 font-bold text-xs">◀ V⁺ SOURCE</span>
+                <span className="text-cyan-500 text-lg animate-pulse">→→→</span>
+              </div>
+              <div className="text-yellow-400 text-[10px] font-bold">
+                ⚡ COLLISION ZONE (i=9,10)
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-purple-500 text-lg animate-pulse">←←←</span>
+                <span className="text-purple-400 font-bold text-xs">V⁻ SOURCE ▶</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Traveling wave oscilloscopes at center */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <div className="text-[10px] text-cyan-400 mb-1 font-bold">
-                LEFT BOUNDARY (i=0) — Pump Source
+                V⁺ RIGHTWARD WAVE at center (i=9) — from LEFT source
               </div>
               <Oscilloscope
-                buffer={scopeLeftRef.current.data}
-                writeIdx={scopeLeftRef.current.writeIdx}
-                length={scopeLeftRef.current.count}
-                label="V₀(t) = ½A[sin(ω₁t)+sin(ω₂t)]"
+                buffer={scopeVRightRef.current.data}
+                writeIdx={scopeVRightRef.current.writeIdx}
+                length={scopeVRightRef.current.count}
+                label="V⁺₉(t) → rightward"
                 color="rgb(0, 220, 255)"
-                height={120}
-              />
-            </div>
-            <div>
-              <div className="text-[10px] text-yellow-400 mb-1 font-bold">
-                CENTER NODE (i=9) — Focus Zone
-              </div>
-              <Oscilloscope
-                buffer={scopeCenterRef.current.data}
-                writeIdx={scopeCenterRef.current.writeIdx}
-                length={scopeCenterRef.current.count}
-                label="V₉(t) — energy accumulation"
-                color="rgb(255, 200, 0)"
-                height={120}
+                height={110}
               />
             </div>
             <div>
               <div className="text-[10px] text-purple-400 mb-1 font-bold">
-                RIGHT BOUNDARY (i=19) — Pump Source
+                V⁻ LEFTWARD WAVE at center (i=9) — from RIGHT source
               </div>
               <Oscilloscope
-                buffer={scopeRightRef.current.data}
-                writeIdx={scopeRightRef.current.writeIdx}
-                length={scopeRightRef.current.count}
-                label="V₁₉(t) = ½A[sin(ω₁t+π)+sin(ω₂t+π)]"
+                buffer={scopeVLeftRef.current.data}
+                writeIdx={scopeVLeftRef.current.writeIdx}
+                length={scopeVLeftRef.current.count}
+                label="V⁻₉(t) ← leftward"
                 color="rgb(200, 100, 255)"
-                height={120}
+                height={110}
               />
             </div>
           </div>
-          <div className="mt-2 text-[9px] text-gray-600 text-center">
-            Sample rate: {scopeSampleRate} Hz • Window: {(SCOPE_SIZE * SCOPE_SAMPLE_INTERVAL * 1000).toFixed(0)} ms
-            • ω₁ = {fmtFixed(params.omega1, 1)} rad/s ({fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz)
-            • ω₂ = {fmtFixed(omega2, 1)} rad/s ({fmtFixed(omega2 / (2 * Math.PI), 2)} Hz)
+          <div className="mt-2 text-[9px] text-gray-500 text-center">
+            V⁺ = (V + Z·I)/2 &nbsp;|&nbsp; V⁻ = (V − Z·I)/2 &nbsp;|&nbsp;
+            Z = √(L/C) = {fmtFixed(Math.sqrt(params.L / params.C), 3)} Ω &nbsp;|&nbsp;
+            Total V = V⁺ + V⁻
           </div>
         </section>
 
-        {/* ── Space-Time Waterfall ── */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {/* SOURCE OSCILLOSCOPES                                               */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
         <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
           <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            🌊 Space-Time Waterfall — Wave Propagation (x × t)
-          </h2>
-          <Waterfall
-            history={waterfallRef.current}
-            maxRows={WATERFALL_ROWS}
-            N={params.N}
-            mode="voltage"
-          />
-          <div className="mt-2 flex justify-between text-[9px] text-gray-600">
-            <span>↑ Recent (top) → Past (bottom)</span>
-            <span>Yellow dashed lines = focus nodes (i=9,10)</span>
-          </div>
-        </section>
-
-        {/* ── Spectrum Analyzer ── */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            📊 Real-Time Spectrum — |V(f)| at Key Nodes
+            📡 Source Signals — Complex Irrational Sum-of-Sines
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <div className="text-[10px] text-cyan-400 mb-1 font-bold">
-                SPECTRUM at LEFT BOUNDARY (i=0)
+                LEFT SOURCE V₀(t) = ½A[sin(ω₁t) + sin(ω₂t)]
               </div>
-              <Spectrum
-                buffer={scopeLeftRef.current.data}
-                writeIdx={scopeLeftRef.current.writeIdx}
-                length={scopeLeftRef.current.count}
-                sampleRate={scopeSampleRate}
-                label="|V₀(f)|"
-                color="rgb(0, 220, 255)"
-                height={120}
-              />
+              <Oscilloscope buffer={scopeLeftRef.current.data} writeIdx={scopeLeftRef.current.writeIdx}
+                length={scopeLeftRef.current.count} label="V₀(t)" color="rgb(0, 220, 255)" height={110} />
             </div>
             <div>
-              <div className="text-[10px] text-yellow-400 mb-1 font-bold">
-                SPECTRUM at CENTER (i=9)
+              <div className="text-[10px] text-purple-400 mb-1 font-bold">
+                RIGHT SOURCE V₁₉(t) = ½A[sin(ω₁t+π) + sin(ω₂t+π)] — anti-phase
               </div>
-              <Spectrum
-                buffer={scopeCenterRef.current.data}
-                writeIdx={scopeCenterRef.current.writeIdx}
-                length={scopeCenterRef.current.count}
-                sampleRate={scopeSampleRate}
-                label="|V₉(f)|"
-                color="rgb(255, 200, 0)"
-                height={120}
-              />
+              <Oscilloscope buffer={scopeRightRef.current.data} writeIdx={scopeRightRef.current.writeIdx}
+                length={scopeRightRef.current.count} label="V₁₉(t)" color="rgb(200, 100, 255)" height={110} />
             </div>
           </div>
           <div className="mt-2 text-[9px] text-gray-600 text-center">
-            Two peaks visible at f₁ = {fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz and f₂ = {fmtFixed(omega2 / (2 * Math.PI), 2)} Hz
-            {params.mode === 'irrational' && ' • Irrational ratio → quasi-periodic interference'}
-            {params.mode === 'harmonic' && ' • Rational ratio → periodic standing waves'}
+            ω₁ = {fmtFixed(params.omega1, 1)} rad/s ({fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz) &nbsp;|&nbsp;
+            ω₂ = {fmtFixed(omega2, 1)} rad/s ({fmtFixed(omega2 / (2 * Math.PI), 2)} Hz) &nbsp;|&nbsp;
+            ω₂/ω₁ = {params.mode === 'irrational' ? '1.47548… (irrational)' : '2.0 (rational)'}
           </div>
         </section>
 
-        {/* ── Node Energy Profile ── */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {/* SPACE-TIME WATERFALL                                               */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
         <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
           <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            Electromagnetic Energy Profile — {params.N} Nodes
+            🌊 Space-Time Waterfall — Waves Propagating Toward Each Other
           </h2>
+          <Waterfall history={waterfallRef.current} maxRows={WATERFALL_ROWS} N={params.N} mode="voltage" />
+          <div className="mt-2 flex justify-between text-[9px] text-gray-600">
+            <span>↑ Recent (top) → Past (bottom) &nbsp;|&nbsp; Diagonal streaks = traveling waves</span>
+            <span>Yellow dashed = focus nodes</span>
+          </div>
+        </section>
 
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {/* SPECTRUM ANALYZER                                                  */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
+            📊 Frequency Spectrum — Two Peaks from Irrational Pumping
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <div className="text-[10px] text-cyan-400 mb-1 font-bold">SPECTRUM at LEFT SOURCE</div>
+              <Spectrum buffer={scopeLeftRef.current.data} writeIdx={scopeLeftRef.current.writeIdx}
+                length={scopeLeftRef.current.count} sampleRate={scopeSampleRate}
+                label="|V₀(f)|" color="rgb(0, 220, 255)" height={110} />
+            </div>
+            <div>
+              <div className="text-[10px] text-yellow-400 mb-1 font-bold">SPECTRUM at CENTER (i=9) — after wave collision</div>
+              <Spectrum buffer={scopeCenterRef.current.data} writeIdx={scopeCenterRef.current.writeIdx}
+                length={scopeCenterRef.current.count} sampleRate={scopeSampleRate}
+                label="|V₉(f)|" color="rgb(255, 200, 0)" height={110} />
+            </div>
+          </div>
+          <div className="mt-2 text-[9px] text-gray-600 text-center">
+            Two spectral peaks at f₁ = {fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz and f₂ = {fmtFixed(omega2 / (2 * Math.PI), 2)} Hz
+            {params.mode === 'irrational' && ' • Irrational ratio → quasi-periodic beating → energy accumulates at center'}
+          </div>
+        </section>
+
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {/* ENERGY PROFILE                                                     */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
+            ⚡ Energy Profile — {params.N} Nodes
+          </h2>
           <div className="relative overflow-x-auto">
             <div className="relative flex items-end justify-between gap-0.5 px-2 py-4 min-w-[600px]">
               {Array.from(state.voltages).map((_, i) => {
@@ -424,46 +484,25 @@ export default function App() {
                 const energy = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
                 const color = energyToColor(energy, maxEnergy);
                 const barHeight = 10 + (energy / Math.max(maxEnergy, 1e-10)) * 120;
-
                 return (
                   <div key={i} className="flex flex-col items-center flex-1">
-                    <div
-                      className="w-full max-w-[28px] rounded-t transition-all duration-100"
-                      style={{
-                        height: `${barHeight}px`,
-                        backgroundColor: color,
-                        boxShadow: energy / Math.max(maxEnergy, 1e-10) > 0.5
-                          ? `0 0 ${8 + 20 * (energy / Math.max(maxEnergy, 1e-10))}px ${color}`
-                          : 'none',
-                      }}
-                    />
-                    <div
-                      className={`w-3 h-3 rounded-full mt-1 transition-all duration-100 ${
-                        isCenter ? 'ring-2 ring-yellow-400/60' : ''
-                      }`}
-                      style={{
-                        backgroundColor: color,
-                        boxShadow: energy / Math.max(maxEnergy, 1e-10) > 0.7
-                          ? `0 0 12px ${color}` : 'none',
-                      }}
-                    />
-                    <span className={`text-[8px] mt-0.5 ${
-                      isCenter ? 'text-yellow-400 font-bold' :
-                      isEdge ? 'text-purple-400' : 'text-gray-600'
-                    }`}>{i}</span>
+                    <div className="w-full max-w-[28px] rounded-t transition-all duration-100"
+                      style={{ height: `${barHeight}px`, backgroundColor: color,
+                        boxShadow: energy / Math.max(maxEnergy, 1e-10) > 0.5 ? `0 0 ${8 + 20 * (energy / Math.max(maxEnergy, 1e-10))}px ${color}` : 'none' }} />
+                    <div className={`w-3 h-3 rounded-full mt-1 transition-all duration-100 ${isCenter ? 'ring-2 ring-yellow-400/60' : ''}`}
+                      style={{ backgroundColor: color }} />
+                    <span className={`text-[8px] mt-0.5 ${isCenter ? 'text-yellow-400 font-bold' : isEdge ? 'text-purple-400' : 'text-gray-600'}`}>{i}</span>
                     {isCenter && <span className="text-[7px] text-yellow-500 font-bold">▼</span>}
                   </div>
                 );
               })}
             </div>
             <div className="flex justify-between px-2 mt-1 min-w-[600px]">
-              <div className="text-[9px] text-cyan-500 font-bold">◀ L-PUMP</div>
-              <div className="text-[9px] text-yellow-500 font-bold">▼ FOCUS ZONE</div>
-              <div className="text-[9px] text-purple-500 font-bold">R-PUMP ▶</div>
+              <div className="text-[9px] text-cyan-500 font-bold">◀ V⁺ SOURCE</div>
+              <div className="text-[9px] text-yellow-500 font-bold">▼ COLLISION / FOCUS</div>
+              <div className="text-[9px] text-purple-500 font-bold">V⁻ SOURCE ▶</div>
             </div>
           </div>
-
-          {/* Heatmap strip */}
           <div className="mt-4">
             <div className="text-[9px] text-gray-500 mb-1">Energy Density Heatmap</div>
             <div className="flex h-6 rounded overflow-hidden border border-gray-800/50">
@@ -475,9 +514,10 @@ export default function App() {
           </div>
         </section>
 
-        {/* ── Controls + Dashboard ── */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
+        {/* CONTROLS + DASHBOARD                                               */}
+        {/* ════════════════════════════════════════════════════════════════════ */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Control Panel */}
           <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
             <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">⚙ Control Panel</h2>
             <div className="space-y-4">
@@ -486,35 +526,23 @@ export default function App() {
                   <span className="text-gray-400">Base Frequency ω₁</span>
                   <span className="text-cyan-400 font-bold">{fmtFixed(params.omega1, 1)} rad/s</span>
                 </label>
-                <input type="range" min="5" max="100" step="0.5"
-                  value={params.omega1}
-                  onChange={e => setParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
-                  className="w-full" />
-                <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
-                  <span>5 rad/s</span><span>100 rad/s</span>
-                </div>
+                <input type="range" min="5" max="100" step="0.5" value={params.omega1}
+                  onChange={e => setParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))} className="w-full" />
               </div>
-
               <div>
                 <label className="text-xs text-gray-400 mb-2 block">Pumping Mode</label>
                 <div className="flex gap-2">
                   <button onClick={() => handleModeChange('irrational')}
                     className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                      params.mode === 'irrational'
-                        ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600 shadow-lg shadow-cyan-900/30'
-                        : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
+                      params.mode === 'irrational' ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600' : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
                     }`}>
-                    <div>⚡ Irrational</div>
-                    <div className="text-[9px] opacity-70 mt-0.5">R = 1.47548…</div>
+                    <div>⚡ Irrational</div><div className="text-[9px] opacity-70 mt-0.5">R = 1.47548…</div>
                   </button>
                   <button onClick={() => handleModeChange('harmonic')}
                     className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
-                      params.mode === 'harmonic'
-                        ? 'bg-purple-900/50 text-purple-300 border-purple-600 shadow-lg shadow-purple-900/30'
-                        : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
+                      params.mode === 'harmonic' ? 'bg-purple-900/50 text-purple-300 border-purple-600' : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
                     }`}>
-                    <div>∿ Harmonic</div>
-                    <div className="text-[9px] opacity-70 mt-0.5">R = 2.0</div>
+                    <div>∿ Harmonic</div><div className="text-[9px] opacity-70 mt-0.5">R = 2.0</div>
                   </button>
                 </div>
                 <div className="text-[9px] text-gray-600 mt-2 bg-gray-900/50 rounded px-2 py-1">
@@ -524,84 +552,61 @@ export default function App() {
                     : <span className="text-purple-600 ml-2">• ω₂/ω₁ = 2.0 (rational)</span>}
                 </div>
               </div>
-
               <div>
                 <label className="flex justify-between text-xs mb-1.5">
                   <span className="text-gray-400">Dissipation G</span>
                   <span className="text-orange-400 font-bold">{fmtFixed(params.G, 3)}</span>
                 </label>
-                <input type="range" min="0" max="0.5" step="0.001"
-                  value={params.G}
-                  onChange={e => setParams(p => ({ ...p, G: parseFloat(e.target.value) }))}
-                  className="w-full" />
-                <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
-                  <span>0 (lossless)</span><span>0.5 (heavy loss)</span>
-                </div>
+                <input type="range" min="0" max="0.5" step="0.001" value={params.G}
+                  onChange={e => setParams(p => ({ ...p, G: parseFloat(e.target.value) }))} className="w-full" />
               </div>
-
               <div>
                 <label className="flex justify-between text-xs mb-1.5">
                   <span className="text-gray-400">Pump Amplitude A</span>
                   <span className="text-green-400 font-bold">{fmtFixed(params.amplitude, 2)}</span>
                 </label>
-                <input type="range" min="0.1" max="3.0" step="0.05"
-                  value={params.amplitude}
-                  onChange={e => setParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))}
-                  className="w-full" />
+                <input type="range" min="0.1" max="3.0" step="0.05" value={params.amplitude}
+                  onChange={e => setParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))} className="w-full" />
               </div>
-
               <div className="bg-gray-900/50 rounded-lg p-3 text-[10px] text-gray-500 space-y-1.5 border border-gray-800/30">
-                <div className="text-gray-400 font-bold mb-1">System Parameters</div>
-                <div className="flex justify-between"><span>Nodes N</span><span className="text-gray-300">{params.N}</span></div>
-                <div className="flex justify-between"><span>Inductance L</span><span className="text-gray-300">{params.L} H</span></div>
-                <div className="flex justify-between"><span>Capacitance C</span><span className="text-gray-300">{params.C} F</span></div>
-                <div className="flex justify-between"><span>Wave speed c = 1/√(LC)</span><span className="text-gray-300">{fmtFixed(1 / Math.sqrt(params.L * params.C), 3)}</span></div>
+                <div className="text-gray-400 font-bold mb-1">System</div>
+                <div className="flex justify-between"><span>N</span><span className="text-gray-300">{params.N}</span></div>
+                <div className="flex justify-between"><span>L</span><span className="text-gray-300">{params.L} H</span></div>
+                <div className="flex justify-between"><span>C</span><span className="text-gray-300">{params.C} F</span></div>
+                <div className="flex justify-between"><span>Z = √(L/C)</span><span className="text-gray-300">{fmtFixed(Math.sqrt(params.L / params.C), 3)} Ω</span></div>
+                <div className="flex justify-between"><span>c = 1/√(LC)</span><span className="text-gray-300">{fmtFixed(1 / Math.sqrt(params.L * params.C), 1)}</span></div>
                 <div className="flex justify-between"><span>Sim time</span><span className="text-gray-300">{fmtFixed(state.time, 3)} s</span></div>
               </div>
             </div>
           </section>
 
-          {/* Analytics Dashboard */}
           <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">📊 Analytics Dashboard</h2>
-
+            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">📊 Analytics</h2>
             <div className="mb-4">
-              <div className="text-[10px] text-gray-500 mb-1">
-                Gain Coefficient K<sub>gain</sub> = E<sub>center</sub> / E<sub>edge</sub>
-              </div>
-              <div className="flex items-end gap-2">
-                <span className={`text-5xl font-black tabular-nums ${
-                  localizationActive
-                    ? 'text-transparent bg-clip-text bg-gradient-to-r from-red-400 to-yellow-400'
-                    : 'text-gray-500'
-                }`}>{fmtFixed(gainCoeff, 2)}</span>
-                <span className="text-xs text-gray-600 pb-2">×</span>
-              </div>
-
+              <div className="text-[10px] text-gray-500 mb-1">K<sub>gain</sub> = E<sub>center</sub> / E<sub>edge</sub></div>
+              <span className={`text-5xl font-black tabular-nums ${
+                localizationActive ? 'text-transparent bg-clip-text bg-gradient-to-r from-red-400 to-yellow-400' : 'text-gray-500'
+              }`}>{fmtFixed(gainCoeff, 2)}</span>
+              <span className="text-xs text-gray-600 ml-1">×</span>
               <div className={`mt-2 px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-2 ${
-                localizationActive
-                  ? 'bg-gradient-to-r from-red-900/50 to-yellow-900/30 text-yellow-300 border border-yellow-700/50'
-                  : 'bg-gray-900/50 text-gray-500 border border-gray-800/50'
+                localizationActive ? 'bg-gradient-to-r from-red-900/50 to-yellow-900/30 text-yellow-300 border border-yellow-700/50' : 'bg-gray-900/50 text-gray-500 border border-gray-800/50'
               }`}>
-                {localizationActive ? (
-                  <><span className="animate-pulse">⚡</span><span>LOCALIZATION ACTIVE — Energy concentrated at center nodes</span></>
-                ) : (
-                  <><span>○</span><span>No significant localization — energy distributed uniformly</span></>
-                )}
+                {localizationActive
+                  ? <><span className="animate-pulse">⚡</span><span>LOCALIZATION ACTIVE — counter-propagating waves constructively interfere at center</span></>
+                  : <><span>○</span><span>No significant localization</span></>}
               </div>
             </div>
-
             <div className="grid grid-cols-2 gap-2 mb-4">
               <div className="bg-gray-900/50 rounded-lg p-2.5 border border-gray-800/30">
-                <div className="text-[9px] text-gray-500">Center Energy (i=9,10)</div>
+                <div className="text-[9px] text-gray-500">Center Energy</div>
                 <div className="text-base font-bold text-yellow-400 tabular-nums">{fmtSci(centerEnergy)}</div>
               </div>
               <div className="bg-gray-900/50 rounded-lg p-2.5 border border-gray-800/30">
-                <div className="text-[9px] text-gray-500">Max Energy (any node)</div>
+                <div className="text-[9px] text-gray-500">Max Energy</div>
                 <div className="text-base font-bold text-red-400 tabular-nums">{fmtSci(maxEnergy)}</div>
               </div>
               <div className="bg-gray-900/50 rounded-lg p-2.5 border border-gray-800/30">
-                <div className="text-[9px] text-gray-500">Total Energy ΣEᵢ</div>
+                <div className="text-[9px] text-gray-500">Total Energy</div>
                 <div className="text-base font-bold text-cyan-400 tabular-nums">{fmtSci(totalEnergy)}</div>
               </div>
               <div className="bg-gray-900/50 rounded-lg p-2.5 border border-gray-800/30">
@@ -609,29 +614,22 @@ export default function App() {
                 <div className="text-base font-bold text-purple-400 tabular-nums">{fmtSci(edgeAvg)}</div>
               </div>
             </div>
-
             <div>
               <div className="text-[9px] text-gray-500 mb-1">Max Energy vs Time</div>
               <div className="bg-gray-900/50 rounded-lg p-2 h-28 relative overflow-hidden border border-gray-800/30">
                 {maxEnergyHistory.length > 2 ? (
                   <svg className="w-full h-full" viewBox={`0 0 ${maxEnergyHistory.length} 100`} preserveAspectRatio="none">
-                    <defs>
-                      <linearGradient id="eGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="rgba(239,68,68,0.4)" />
-                        <stop offset="100%" stopColor="rgba(239,68,68,0.0)" />
-                      </linearGradient>
-                    </defs>
+                    <defs><linearGradient id="eGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="rgba(239,68,68,0.4)" /><stop offset="100%" stopColor="rgba(239,68,68,0.0)" />
+                    </linearGradient></defs>
                     <polyline fill="url(#eGrad)" stroke="none" points={historyFillPoints} />
                     <polyline fill="none" stroke="rgb(239,68,68)" strokeWidth="1.5" points={historySvgPoints} />
                   </svg>
                 ) : (
-                  <div className="flex items-center justify-center h-full text-gray-600 text-xs">
-                    Start simulation to see energy evolution
-                  </div>
+                  <div className="flex items-center justify-center h-full text-gray-600 text-xs">Start simulation</div>
                 )}
               </div>
             </div>
-
             <div className="mt-3">
               <div className="text-[9px] text-gray-500 mb-1">Energy Distribution</div>
               <div className="flex items-end gap-px h-14 bg-gray-900/50 rounded-lg p-1.5 border border-gray-800/30">
@@ -639,14 +637,8 @@ export default function App() {
                   const energy = Number.isFinite(e) ? e : 0;
                   const h = (energy / Math.max(maxEnergy, 1e-10)) * 100;
                   const isCenter = i === 9 || i === 10;
-                  return (
-                    <div key={i} className="flex-1 rounded-t-sm transition-all duration-100"
-                      style={{
-                        height: `${Math.max(h, 3)}%`,
-                        backgroundColor: isCenter ? '#fbbf24' : energyToColor(energy, maxEnergy),
-                        boxShadow: isCenter && h > 50 ? '0 0 6px #fbbf24' : 'none',
-                      }} />
-                  );
+                  return <div key={i} className="flex-1 rounded-t-sm transition-all duration-100"
+                    style={{ height: `${Math.max(h, 3)}%`, backgroundColor: isCenter ? '#fbbf24' : energyToColor(energy, maxEnergy) }} />;
                 })}
               </div>
             </div>
@@ -658,31 +650,28 @@ export default function App() {
           <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">📐 Physics Model</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-gray-400">
             <div className="bg-gray-900/30 rounded-lg p-3 border border-gray-800/30">
-              <div className="text-cyan-400 font-bold mb-1.5 text-[11px]">Discrete Telegraph Equation</div>
+              <div className="text-cyan-400 font-bold mb-1.5 text-[11px]">Telegraph Equations</div>
               <div className="font-mono text-[10px] leading-relaxed text-gray-300">
-                C·dVᵢ/dt = (Vᵢ₋₁ − Vᵢ)/L<br/>
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ (Vᵢ₊₁ − Vᵢ)/L − G·Vᵢ
+                C·dVᵢ/dt = Iᵢ₋₁ − Iᵢ − G·Vᵢ<br/>
+                L·dIᵢ/dt = Vᵢ − Vᵢ₊₁
               </div>
-              <div className="mt-2 text-[9px] text-gray-600">Internal nodes i = 1…N−2</div>
+              <div className="mt-2 text-[9px] text-gray-600">Coupled V-I system → bidirectional wave propagation</div>
             </div>
             <div className="bg-gray-900/30 rounded-lg p-3 border border-gray-800/30">
-              <div className="text-purple-400 font-bold mb-1.5 text-[11px]">Boundary Pumping (anti-phase)</div>
+              <div className="text-purple-400 font-bold mb-1.5 text-[11px]">Counter-Propagating Drive</div>
               <div className="font-mono text-[10px] leading-relaxed text-gray-300">
-                V₀(t) = (A/2)·[sin(ω₁t) + sin(ω₂t)]<br/>
-                V<sub>N−1</sub>(t) = (A/2)·[sin(ω₁t+π)<br/>
-                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;+ sin(ω₂t+π)]
+                V₀(t) → launches V⁺ rightward<br/>
+                V<sub>N−1</sub>(t) → launches V⁻ leftward
               </div>
-              <div className="mt-2 text-[9px] text-gray-600">Dual-frequency drive from both ends</div>
+              <div className="mt-2 text-[9px] text-gray-600">Anti-phase dual-frequency sources at both ends</div>
             </div>
             <div className="bg-gray-900/30 rounded-lg p-3 border border-gray-800/30">
-              <div className="text-yellow-400 font-bold mb-1.5 text-[11px]">Irrational Frequency Ratio</div>
+              <div className="text-yellow-400 font-bold mb-1.5 text-[11px]">Traveling Wave Decomposition</div>
               <div className="font-mono text-[10px] leading-relaxed text-gray-300">
-                ω₂/ω₁ = R<br/>
-                &nbsp;&nbsp;= 1.475482818459…
+                V⁺ = (V + Z·I) / 2 → rightward<br/>
+                V⁻ = (V − Z·I) / 2 ← leftward
               </div>
-              <div className="mt-2 text-[9px] text-gray-600">
-                Non-periodic interference → constructive accumulation at center via quasi-phase-matching
-              </div>
+              <div className="mt-2 text-[9px] text-gray-600">Z = √(L/C) — waves meet at center, irrational ratio → constructive accumulation</div>
             </div>
           </div>
         </section>
@@ -690,7 +679,7 @@ export default function App() {
 
       <footer className="border-t border-gray-800/30 px-6 py-3 mt-4">
         <div className="max-w-7xl mx-auto text-[10px] text-gray-700 text-center">
-          LC-Chain EM Simulator • RK4 + NaN-guard • Real-time oscilloscopes • Spectral analysis • Waterfall plot
+          LC-Chain EM Simulator • Counter-propagating waves • RK4 + NaN-guard • Real-time oscilloscopes
         </div>
       </footer>
     </div>
