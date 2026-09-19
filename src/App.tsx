@@ -88,11 +88,10 @@ export default function App() {
   // Waterfall
   const waterfallRef = useRef<Float32Array[]>([]);
 
-  // Energy accumulation history (cumulative integral over time)
+  // Energy accumulation history — rolling average over last N seconds
   const [energyAccHistory, setEnergyAccHistory] = useState<{ t: number; eCenter: number; eEdge: number }[]>([]);
-  const accCenterRef = useRef(0);
-  const accEdgeRef = useRef(0);
-  const lastAccTimeRef = useRef(0);
+  const rollingWindowRef = useRef<{ t: number; eCenter: number; eEdge: number }[]>([]);
+  const ROLLING_WINDOW_SEC = 0.5; // Show average over last 0.5 seconds
 
   // Pulse animation
   const [pulsePhase, setPulsePhase] = useState(0);
@@ -154,23 +153,27 @@ export default function App() {
         if (waterfallRef.current.length > WATERFALL_ROWS) waterfallRef.current.shift();
       }
 
-      // Energy accumulation (integrate energy over time)
-      const dtAcc = currentState.time - lastAccTimeRef.current;
-      if (dtAcc > 0 && Number.isFinite(dtAcc)) {
-        lastAccTimeRef.current = currentState.time;
-        // Center: nodes 9, 10
-        const eCenterNow = (Number.isFinite(currentState.energies[9]) ? currentState.energies[9] : 0)
-                         + (Number.isFinite(currentState.energies[10]) ? currentState.energies[10] : 0);
-        // Edges: nodes 0,1,2 and N-3, N-2, N-1
-        const N = paramsRef.current.N;
-        const eEdgeNow = (Number.isFinite(currentState.energies[0]) ? currentState.energies[0] : 0)
-                       + (Number.isFinite(currentState.energies[1]) ? currentState.energies[1] : 0)
-                       + (Number.isFinite(currentState.energies[2]) ? currentState.energies[2] : 0)
-                       + (Number.isFinite(currentState.energies[N - 3]) ? currentState.energies[N - 3] : 0)
-                       + (Number.isFinite(currentState.energies[N - 2]) ? currentState.energies[N - 2] : 0)
-                       + (Number.isFinite(currentState.energies[N - 1]) ? currentState.energies[N - 1] : 0);
-        accCenterRef.current += eCenterNow * dtAcc;
-        accEdgeRef.current += eEdgeNow * dtAcc;
+      // Energy accumulation — rolling window average
+      const eCenterNow = (Number.isFinite(currentState.energies[9]) ? currentState.energies[9] : 0)
+                       + (Number.isFinite(currentState.energies[10]) ? currentState.energies[10] : 0);
+      const N = paramsRef.current.N;
+      const eEdgeNow = (Number.isFinite(currentState.energies[0]) ? currentState.energies[0] : 0)
+                     + (Number.isFinite(currentState.energies[1]) ? currentState.energies[1] : 0)
+                     + (Number.isFinite(currentState.energies[2]) ? currentState.energies[2] : 0)
+                     + (Number.isFinite(currentState.energies[N - 3]) ? currentState.energies[N - 3] : 0)
+                     + (Number.isFinite(currentState.energies[N - 2]) ? currentState.energies[N - 2] : 0)
+                     + (Number.isFinite(currentState.energies[N - 1]) ? currentState.energies[N - 1] : 0);
+      
+      rollingWindowRef.current.push({
+        t: currentState.time,
+        eCenter: eCenterNow,
+        eEdge: eEdgeNow,
+      });
+      
+      // Keep only last ROLLING_WINDOW_SEC seconds
+      const cutoffTime = currentState.time - ROLLING_WINDOW_SEC;
+      while (rollingWindowRef.current.length > 0 && rollingWindowRef.current[0].t < cutoffTime) {
+        rollingWindowRef.current.shift();
       }
     }
 
@@ -193,16 +196,26 @@ export default function App() {
         setScopeTick(t => t + 1);
         setPulsePhase(p => (p + 1) % 100);
 
-        // Update energy accumulation history
-        setEnergyAccHistory(hist => {
-          const next = [...hist, {
-            t: currentState.time,
-            eCenter: accCenterRef.current,
-            eEdge: accEdgeRef.current,
-          }];
-          if (next.length > 500) next.shift();
-          return next;
-        });
+        // Update energy accumulation history — compute rolling average
+        if (rollingWindowRef.current.length > 0) {
+          let sumCenter = 0, sumEdge = 0;
+          for (const pt of rollingWindowRef.current) {
+            sumCenter += pt.eCenter;
+            sumEdge += pt.eEdge;
+          }
+          const avgCenter = sumCenter / rollingWindowRef.current.length;
+          const avgEdge = sumEdge / rollingWindowRef.current.length;
+          
+          setEnergyAccHistory(hist => {
+            const next = [...hist, {
+              t: currentState.time,
+              eCenter: avgCenter,
+              eEdge: avgEdge,
+            }];
+            if (next.length > 500) next.shift();
+            return next;
+          });
+        }
       }
     }
 
@@ -238,9 +251,7 @@ export default function App() {
     scopeVMinusRef.current.reset();
     scopeVTotalRef.current.reset();
     waterfallRef.current = [];
-    accCenterRef.current = 0;
-    accEdgeRef.current = 0;
-    lastAccTimeRef.current = 0;
+    rollingWindowRef.current = [];
     setEnergyAccHistory([]);
     setPulsePhase(0);
   };
@@ -417,20 +428,20 @@ export default function App() {
             })()}
           </div>
           <p className="text-[10px] text-gray-500 mb-3">
-            <span className="text-yellow-400 font-bold">Yellow</span> = cumulative energy at center nodes (i=9,10) &nbsp;|&nbsp;
-            <span className="text-purple-400 font-bold">Purple</span> = cumulative energy at edge nodes (i=0,1,2,17,18,19)<br/>
-            If <span className="text-yellow-400 font-bold">yellow grows faster</span> → the irrational pumping scheme <span className="text-red-400 font-bold">DOES pump energy into the center</span>
+            <span className="text-yellow-400 font-bold">Yellow</span> = rolling average energy at center nodes (i=9,10) &nbsp;|&nbsp;
+            <span className="text-purple-400 font-bold">Purple</span> = rolling average energy at edge nodes (i=0,1,2,17,18,19)<br/>
+            If <span className="text-yellow-400 font-bold">yellow is higher</span> → the irrational pumping scheme <span className="text-red-400 font-bold">DOES concentrate energy at the center</span>
           </p>
           <EnergyAccumulation history={energyAccHistory} height={240} />
           <div className="mt-2 grid grid-cols-3 gap-2 text-[10px]">
             <div className="bg-gray-900/50 rounded p-2 border border-gray-800/30">
-              <span className="text-gray-500">∫E_center dt =</span>
+              <span className="text-gray-500">⟨E_center⟩ =</span>
               <span className="text-yellow-400 font-bold ml-1">
                 {energyAccHistory.length > 0 ? energyAccHistory[energyAccHistory.length - 1].eCenter.toExponential(2) : '0.00e+0'}
               </span>
             </div>
             <div className="bg-gray-900/50 rounded p-2 border border-gray-800/30">
-              <span className="text-gray-500">∫E_edge dt =</span>
+              <span className="text-gray-500">⟨E_edge⟩ =</span>
               <span className="text-purple-400 font-bold ml-1">
                 {energyAccHistory.length > 0 ? energyAccHistory[energyAccHistory.length - 1].eEdge.toExponential(2) : '0.00e+0'}
               </span>

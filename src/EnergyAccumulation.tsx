@@ -1,6 +1,6 @@
-// Energy Accumulation Chart — shows whether the system pumps energy into the center.
-// Plots cumulative energy over time for center nodes vs edge nodes.
-// If center curve grows faster → energy is being pumped to the center.
+// Energy Accumulation Chart — shows rolling average energy over time.
+// Plots average energy for center nodes vs edge nodes in a sliding window.
+// If center curve is higher → energy is concentrated at the center.
 
 import { useEffect, useRef } from 'react';
 
@@ -151,7 +151,7 @@ export default function EnergyAccumulation({ history, height = 220 }: Props) {
     ctx.fillStyle = 'rgba(255,255,255,0.3)';
     ctx.font = '9px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('Cumulative Energy', 0, 0);
+    ctx.fillText('Average Energy (rolling)', 0, 0);
     ctx.restore();
 
     // X axis label
