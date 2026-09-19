@@ -9,8 +9,35 @@ import {
   safeMax,
   safeSum,
 } from './simulation';
+import Oscilloscope from './Oscilloscope';
+import Waterfall from './Waterfall';
+import Spectrum from './Spectrum';
 
-// ─── NaN-safe color mapping ──────────────────────────────────────────────────
+// ─── Ring buffer for oscilloscope samples ────────────────────────────────────
+
+class RingBuffer {
+  data: Float32Array;
+  writeIdx = 0;
+  count = 0;
+
+  constructor(size: number) {
+    this.data = new Float32Array(size);
+  }
+
+  push(v: number) {
+    this.data[this.writeIdx] = Number.isFinite(v) ? v : 0;
+    this.writeIdx = (this.writeIdx + 1) % this.data.length;
+    if (this.count < this.data.length) this.count++;
+  }
+
+  reset() {
+    this.data.fill(0);
+    this.writeIdx = 0;
+    this.count = 0;
+  }
+}
+
+// ─── Color mapping ───────────────────────────────────────────────────────────
 
 function energyToColor(energy: number, maxEnergy: number): string {
   if (!Number.isFinite(energy) || !Number.isFinite(maxEnergy) || maxEnergy <= 0) {
@@ -20,132 +47,20 @@ function energyToColor(energy: number, maxEnergy: number): string {
 
   let r: number, g: number, b: number;
   if (t < 0.2) {
-    const s = t / 0.2;
-    r = 5 + 10 * s; g = 5 + 20 * s; b = 40 + 120 * s;
+    const s = t / 0.2; r = 5 + 10 * s; g = 5 + 20 * s; b = 40 + 120 * s;
   } else if (t < 0.4) {
-    const s = (t - 0.2) / 0.2;
-    r = 15 + 10 * s; g = 25 + 100 * s; b = 160 + 95 * s;
+    const s = (t - 0.2) / 0.2; r = 15 + 10 * s; g = 25 + 100 * s; b = 160 + 95 * s;
   } else if (t < 0.6) {
-    const s = (t - 0.4) / 0.2;
-    r = 25 + 100 * s; g = 125 + 105 * s; b = 255 - 55 * s;
+    const s = (t - 0.4) / 0.2; r = 25 + 100 * s; g = 125 + 105 * s; b = 255 - 55 * s;
   } else if (t < 0.8) {
-    const s = (t - 0.6) / 0.2;
-    r = 125 + 130 * s; g = 230 - 30 * s; b = 200 - 150 * s;
+    const s = (t - 0.6) / 0.2; r = 125 + 130 * s; g = 230 - 30 * s; b = 200 - 150 * s;
   } else {
-    const s = (t - 0.8) / 0.2;
-    r = 255; g = 200 + 55 * s; b = 50 + 205 * s;
+    const s = (t - 0.8) / 0.2; r = 255; g = 200 + 55 * s; b = 50 + 205 * s;
   }
   return `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
 }
 
-// ─── Canvas waveform ─────────────────────────────────────────────────────────
-
-function WaveformCanvas({ state, params }: { state: SimulationState; params: SimulationParams }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const w = canvas.width;
-    const h = canvas.height;
-    const N = params.N;
-
-    ctx.fillStyle = '#0a0a1a';
-    ctx.fillRect(0, 0, w, h);
-
-    // Grid
-    ctx.strokeStyle = '#1a1a3a';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= 10; i++) {
-      const y = (i / 10) * h;
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-    }
-    for (let i = 0; i < N; i++) {
-      const x = (i / (N - 1)) * w;
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-    }
-
-    // Zero line
-    ctx.strokeStyle = '#333366';
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
-
-    // Scale
-    const maxV = Math.max(safeMax(new Float64Array(Array.from(state.voltages).map(Math.abs))), 0.01);
-    const maxE = Math.max(safeMax(state.energies), 1e-10);
-
-    // Voltage waveform
-    ctx.beginPath();
-    ctx.strokeStyle = '#00ffcc';
-    ctx.lineWidth = 2;
-    ctx.shadowColor = '#00ffcc';
-    ctx.shadowBlur = 4;
-    for (let i = 0; i < N; i++) {
-      const x = (i / (N - 1)) * w;
-      const v = Number.isFinite(state.voltages[i]) ? state.voltages[i] : 0;
-      const y = h / 2 - (v / maxV) * (h / 2 - 10);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    // Energy filled area
-    ctx.beginPath();
-    for (let i = 0; i < N; i++) {
-      const x = (i / (N - 1)) * w;
-      const e = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
-      const y = h - (e / maxE) * (h * 0.3);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
-    ctx.fillStyle = 'rgba(255, 50, 50, 0.15)';
-    ctx.fill();
-
-    // Energy line
-    ctx.beginPath();
-    ctx.strokeStyle = 'rgba(255, 100, 50, 0.7)';
-    ctx.lineWidth = 1.5;
-    for (let i = 0; i < N; i++) {
-      const x = (i / (N - 1)) * w;
-      const e = Number.isFinite(state.energies[i]) ? state.energies[i] : 0;
-      const y = h - (e / maxE) * (h * 0.3);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Center markers
-    const cx1 = (9 / (N - 1)) * w;
-    const cx2 = (10 / (N - 1)) * w;
-    ctx.strokeStyle = 'rgba(255, 200, 0, 0.4)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath(); ctx.moveTo(cx1, 0); ctx.lineTo(cx1, h); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(cx2, 0); ctx.lineTo(cx2, h); ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Labels
-    ctx.fillStyle = '#00ffcc'; ctx.font = '10px monospace';
-    ctx.fillText('V(t)', 4, 12);
-    ctx.fillStyle = 'rgba(255, 100, 50, 0.8)';
-    ctx.fillText('E(t)', 4, h - 4);
-    ctx.fillStyle = 'rgba(255, 200, 0, 0.6)';
-    ctx.fillText('FOCUS', cx1 - 12, 12);
-  }, [state, params]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      width={800}
-      height={200}
-      className="w-full h-48 rounded-lg border border-gray-800"
-    />
-  );
-}
-
-// ─── Format helpers (NaN-safe) ───────────────────────────────────────────────
+// ─── Format helpers ──────────────────────────────────────────────────────────
 
 function fmtSci(v: number): string {
   if (!Number.isFinite(v)) return '0.00e+0';
@@ -157,6 +72,15 @@ function fmtFixed(v: number, d = 2): string {
   return v.toFixed(d);
 }
 
+// ─── Constants ───────────────────────────────────────────────────────────────
+
+const SIM_DT = 0.003;
+const SUB_STEPS = 5;
+const SCOPE_SIZE = 512;          // Oscilloscope buffer length
+const SCOPE_SAMPLE_INTERVAL = 0.001; // Sample every 1ms of sim time (1 kHz)
+const WATERFALL_ROWS = 150;      // Number of time rows in waterfall
+const WATERFALL_SAMPLE_INTERVAL = 0.005; // New waterfall row every 5ms
+
 // ─── Main App ────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -166,6 +90,17 @@ export default function App() {
   const [gainCoeff, setGainCoeff] = useState(1.0);
   const [maxEnergyHistory, setMaxEnergyHistory] = useState<{ t: number; e: number }[]>([]);
 
+  // Oscilloscope buffers (stored in refs so they don't trigger re-render on every sample)
+  const scopeLeftRef = useRef(new RingBuffer(SCOPE_SIZE));
+  const scopeCenterRef = useRef(new RingBuffer(SCOPE_SIZE));
+  const scopeRightRef = useRef(new RingBuffer(SCOPE_SIZE));
+
+  // Waterfall history
+  const waterfallRef = useRef<Float32Array[]>([]);
+
+  // Force re-render of oscilloscopes periodically
+  const [scopeTick, setScopeTick] = useState(0);
+
   const stateRef = useRef(state);
   const paramsRef = useRef(params);
   const animFrameRef = useRef<number>(0);
@@ -173,13 +108,12 @@ export default function App() {
   const runningRef = useRef(isRunning);
   const accumulatorRef = useRef(0);
   const frameTickRef = useRef(0);
+  const lastScopeSampleTime = useRef(0);
+  const lastWaterfallTime = useRef(0);
 
   useEffect(() => { stateRef.current = state; }, [state]);
   useEffect(() => { paramsRef.current = params; }, [params]);
   useEffect(() => { runningRef.current = isRunning; }, [isRunning]);
-
-  const SIM_DT = 0.003;
-  const SUB_STEPS = 5;
 
   const simulationLoop = useCallback(() => {
     if (!runningRef.current) return;
@@ -198,17 +132,36 @@ export default function App() {
       currentState = advanceSimulation(currentState, SIM_DT, paramsRef.current, SUB_STEPS);
       accumulatorRef.current -= SIM_DT;
       stepsThisFrame++;
+
+      // Sample oscilloscopes at fixed sim-time intervals
+      if (currentState.time - lastScopeSampleTime.current >= SCOPE_SAMPLE_INTERVAL) {
+        lastScopeSampleTime.current = currentState.time;
+        scopeLeftRef.current.push(currentState.voltages[0]);
+        scopeCenterRef.current.push(currentState.voltages[9]);
+        scopeRightRef.current.push(currentState.voltages[paramsRef.current.N - 1]);
+      }
+
+      // Sample waterfall at fixed intervals
+      if (currentState.time - lastWaterfallTime.current >= WATERFALL_SAMPLE_INTERVAL) {
+        lastWaterfallTime.current = currentState.time;
+        const snapshot = new Float32Array(paramsRef.current.N);
+        for (let i = 0; i < paramsRef.current.N; i++) {
+          snapshot[i] = Number.isFinite(currentState.voltages[i]) ? currentState.voltages[i] : 0;
+        }
+        waterfallRef.current.push(snapshot);
+        if (waterfallRef.current.length > WATERFALL_ROWS) {
+          waterfallRef.current.shift();
+        }
+      }
     }
 
     if (stepsThisFrame > 0) {
-      // NaN-safe gain
       const gain = computeGainCoefficient(currentState.energies, paramsRef.current.N);
       setState(currentState);
       setGainCoeff(Number.isFinite(gain) ? gain : 1.0);
       stateRef.current = currentState;
 
       frameTickRef.current++;
-      // Update history every 5 frames
       if (frameTickRef.current % 5 === 0) {
         const maxE = safeMax(currentState.energies);
         if (Number.isFinite(maxE)) {
@@ -218,6 +171,8 @@ export default function App() {
             return next;
           });
         }
+        // Trigger oscilloscope re-render
+        setScopeTick(t => t + 1);
       }
     }
 
@@ -246,13 +201,19 @@ export default function App() {
     frameTickRef.current = 0;
     stateRef.current = newState;
     accumulatorRef.current = 0;
+    lastScopeSampleTime.current = 0;
+    lastWaterfallTime.current = 0;
+    scopeLeftRef.current.reset();
+    scopeCenterRef.current.reset();
+    scopeRightRef.current.reset();
+    waterfallRef.current = [];
   };
 
   const handleModeChange = (mode: 'irrational' | 'harmonic') => {
     setParams(prev => ({ ...prev, mode }));
   };
 
-  // ─── Derived metrics (all NaN-safe) ────────────────────────────────────────
+  // ─── Derived metrics ───────────────────────────────────────────────────────
 
   const localizationActive = Number.isFinite(gainCoeff) && gainCoeff > 2.0;
   const maxEnergy = safeMax(state.energies);
@@ -262,9 +223,7 @@ export default function App() {
     Number.isFinite(state.energies[9]) ? state.energies[9] : 0,
     Number.isFinite(state.energies[10]) ? state.energies[10] : 0,
   );
-
   const totalEnergy = safeSum(state.energies);
-
   const edgeAvg = (() => {
     const idx = [0, 1, 2, params.N - 3, params.N - 2, params.N - 1];
     let s = 0;
@@ -272,7 +231,7 @@ export default function App() {
     return s / idx.length;
   })();
 
-  // SVG history points (NaN-safe)
+  // SVG history
   const historySvgPoints = (() => {
     if (maxEnergyHistory.length < 2) return '';
     const histMax = Math.max(...maxEnergyHistory.map(h => Number.isFinite(h.e) ? h.e : 0), 1e-10);
@@ -282,7 +241,6 @@ export default function App() {
       return `${i},${y.toFixed(1)}`;
     }).join(' ');
   })();
-
   const historyFillPoints = (() => {
     if (maxEnergyHistory.length < 2) return '';
     const histMax = Math.max(...maxEnergyHistory.map(h => Number.isFinite(h.e) ? h.e : 0), 1e-10);
@@ -294,17 +252,23 @@ export default function App() {
     return `0,100 ${pts} ${maxEnergyHistory.length - 1},100`;
   })();
 
+  // Sample rate for spectrum = 1 / SCOPE_SAMPLE_INTERVAL = 1000 Hz
+  const scopeSampleRate = 1 / SCOPE_SAMPLE_INTERVAL;
+
+  // Suppress unused warning
+  void scopeTick;
+
   return (
     <div className="min-h-screen bg-[#050510] text-white font-mono overflow-x-hidden">
       {/* ── Header ── */}
       <header className="border-b border-gray-800/50 px-4 sm:px-6 py-3 bg-[#0a0a1a]/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+        <div className="max-w-7xl mx-auto flex items-center justify-between flex-wrap gap-2">
           <div>
             <h1 className="text-lg sm:text-xl font-bold bg-gradient-to-r from-cyan-400 to-purple-400 bg-clip-text text-transparent">
               ⚡ LC-Chain EM Simulator
             </h1>
             <p className="text-[10px] sm:text-xs text-gray-500 mt-0.5">
-              Discrete electromagnetic line • Irrational spectral pumping • Energy localization
+              Real-time irrational spectral pumping • Wave propagation • Energy localization
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -334,21 +298,122 @@ export default function App() {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-4 space-y-4">
-        {/* ── Waveform ── */}
-        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
-              Voltage &amp; Energy Waveform
-            </h2>
-            <span className="text-[10px] text-gray-600">t = {fmtFixed(state.time, 3)}s</span>
-          </div>
-          <WaveformCanvas state={state} params={params} />
-        </section>
-
-        {/* ── Node Visualization ── */}
+        {/* ── Real-time Oscilloscopes ── */}
         <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
           <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            Electromagnetic Profile — {params.N} Nodes
+            📡 Real-Time Oscilloscopes — Voltage V(t) at Key Nodes
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <div className="text-[10px] text-cyan-400 mb-1 font-bold">
+                LEFT BOUNDARY (i=0) — Pump Source
+              </div>
+              <Oscilloscope
+                buffer={scopeLeftRef.current.data}
+                writeIdx={scopeLeftRef.current.writeIdx}
+                length={scopeLeftRef.current.count}
+                label="V₀(t) = ½A[sin(ω₁t)+sin(ω₂t)]"
+                color="rgb(0, 220, 255)"
+                height={120}
+              />
+            </div>
+            <div>
+              <div className="text-[10px] text-yellow-400 mb-1 font-bold">
+                CENTER NODE (i=9) — Focus Zone
+              </div>
+              <Oscilloscope
+                buffer={scopeCenterRef.current.data}
+                writeIdx={scopeCenterRef.current.writeIdx}
+                length={scopeCenterRef.current.count}
+                label="V₉(t) — energy accumulation"
+                color="rgb(255, 200, 0)"
+                height={120}
+              />
+            </div>
+            <div>
+              <div className="text-[10px] text-purple-400 mb-1 font-bold">
+                RIGHT BOUNDARY (i=19) — Pump Source
+              </div>
+              <Oscilloscope
+                buffer={scopeRightRef.current.data}
+                writeIdx={scopeRightRef.current.writeIdx}
+                length={scopeRightRef.current.count}
+                label="V₁₉(t) = ½A[sin(ω₁t+π)+sin(ω₂t+π)]"
+                color="rgb(200, 100, 255)"
+                height={120}
+              />
+            </div>
+          </div>
+          <div className="mt-2 text-[9px] text-gray-600 text-center">
+            Sample rate: {scopeSampleRate} Hz • Window: {(SCOPE_SIZE * SCOPE_SAMPLE_INTERVAL * 1000).toFixed(0)} ms
+            • ω₁ = {fmtFixed(params.omega1, 1)} rad/s ({fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz)
+            • ω₂ = {fmtFixed(omega2, 1)} rad/s ({fmtFixed(omega2 / (2 * Math.PI), 2)} Hz)
+          </div>
+        </section>
+
+        {/* ── Space-Time Waterfall ── */}
+        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
+            🌊 Space-Time Waterfall — Wave Propagation (x × t)
+          </h2>
+          <Waterfall
+            history={waterfallRef.current}
+            maxRows={WATERFALL_ROWS}
+            N={params.N}
+            mode="voltage"
+          />
+          <div className="mt-2 flex justify-between text-[9px] text-gray-600">
+            <span>↑ Recent (top) → Past (bottom)</span>
+            <span>Yellow dashed lines = focus nodes (i=9,10)</span>
+          </div>
+        </section>
+
+        {/* ── Spectrum Analyzer ── */}
+        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
+            📊 Real-Time Spectrum — |V(f)| at Key Nodes
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <div className="text-[10px] text-cyan-400 mb-1 font-bold">
+                SPECTRUM at LEFT BOUNDARY (i=0)
+              </div>
+              <Spectrum
+                buffer={scopeLeftRef.current.data}
+                writeIdx={scopeLeftRef.current.writeIdx}
+                length={scopeLeftRef.current.count}
+                sampleRate={scopeSampleRate}
+                label="|V₀(f)|"
+                color="rgb(0, 220, 255)"
+                height={120}
+              />
+            </div>
+            <div>
+              <div className="text-[10px] text-yellow-400 mb-1 font-bold">
+                SPECTRUM at CENTER (i=9)
+              </div>
+              <Spectrum
+                buffer={scopeCenterRef.current.data}
+                writeIdx={scopeCenterRef.current.writeIdx}
+                length={scopeCenterRef.current.count}
+                sampleRate={scopeSampleRate}
+                label="|V₉(f)|"
+                color="rgb(255, 200, 0)"
+                height={120}
+              />
+            </div>
+          </div>
+          <div className="mt-2 text-[9px] text-gray-600 text-center">
+            Two peaks visible at f₁ = {fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz and f₂ = {fmtFixed(omega2 / (2 * Math.PI), 2)} Hz
+            {params.mode === 'irrational' && ' • Irrational ratio → quasi-periodic interference'}
+            {params.mode === 'harmonic' && ' • Rational ratio → periodic standing waves'}
+          </div>
+        </section>
+
+        {/* ── Node Energy Profile ── */}
+        <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
+            Electromagnetic Energy Profile — {params.N} Nodes
           </h2>
 
           <div className="relative overflow-x-auto">
@@ -379,24 +444,18 @@ export default function App() {
                       style={{
                         backgroundColor: color,
                         boxShadow: energy / Math.max(maxEnergy, 1e-10) > 0.7
-                          ? `0 0 12px ${color}`
-                          : 'none',
+                          ? `0 0 12px ${color}` : 'none',
                       }}
                     />
                     <span className={`text-[8px] mt-0.5 ${
                       isCenter ? 'text-yellow-400 font-bold' :
                       isEdge ? 'text-purple-400' : 'text-gray-600'
-                    }`}>
-                      {i}
-                    </span>
-                    {isCenter && (
-                      <span className="text-[7px] text-yellow-500 font-bold">▼</span>
-                    )}
+                    }`}>{i}</span>
+                    {isCenter && <span className="text-[7px] text-yellow-500 font-bold">▼</span>}
                   </div>
                 );
               })}
             </div>
-
             <div className="flex justify-between px-2 mt-1 min-w-[600px]">
               <div className="text-[9px] text-cyan-500 font-bold">◀ L-PUMP</div>
               <div className="text-[9px] text-yellow-500 font-bold">▼ FOCUS ZONE</div>
@@ -409,11 +468,8 @@ export default function App() {
             <div className="text-[9px] text-gray-500 mb-1">Energy Density Heatmap</div>
             <div className="flex h-6 rounded overflow-hidden border border-gray-800/50">
               {Array.from(state.energies).map((e, i) => (
-                <div
-                  key={i}
-                  className="flex-1 transition-colors duration-100"
-                  style={{ backgroundColor: energyToColor(Number.isFinite(e) ? e : 0, maxEnergy) }}
-                />
+                <div key={i} className="flex-1 transition-colors duration-100"
+                  style={{ backgroundColor: energyToColor(Number.isFinite(e) ? e : 0, maxEnergy) }} />
               ))}
             </div>
           </div>
@@ -423,51 +479,40 @@ export default function App() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Control Panel */}
           <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">
-              ⚙ Control Panel
-            </h2>
-
+            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">⚙ Control Panel</h2>
             <div className="space-y-4">
-              {/* ω₁ */}
               <div>
                 <label className="flex justify-between text-xs mb-1.5">
                   <span className="text-gray-400">Base Frequency ω₁</span>
                   <span className="text-cyan-400 font-bold">{fmtFixed(params.omega1, 1)} rad/s</span>
                 </label>
-                <input
-                  type="range" min="5" max="100" step="0.5"
+                <input type="range" min="5" max="100" step="0.5"
                   value={params.omega1}
                   onChange={e => setParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
+                  className="w-full" />
                 <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
                   <span>5 rad/s</span><span>100 rad/s</span>
                 </div>
               </div>
 
-              {/* Mode */}
               <div>
                 <label className="text-xs text-gray-400 mb-2 block">Pumping Mode</label>
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => handleModeChange('irrational')}
+                  <button onClick={() => handleModeChange('irrational')}
                     className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
                       params.mode === 'irrational'
                         ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600 shadow-lg shadow-cyan-900/30'
                         : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
-                    }`}
-                  >
+                    }`}>
                     <div>⚡ Irrational</div>
                     <div className="text-[9px] opacity-70 mt-0.5">R = 1.47548…</div>
                   </button>
-                  <button
-                    onClick={() => handleModeChange('harmonic')}
+                  <button onClick={() => handleModeChange('harmonic')}
                     className={`flex-1 px-3 py-2.5 rounded-lg text-xs font-bold transition-all border ${
                       params.mode === 'harmonic'
                         ? 'bg-purple-900/50 text-purple-300 border-purple-600 shadow-lg shadow-purple-900/30'
                         : 'bg-gray-900 text-gray-500 border-gray-700 hover:bg-gray-800'
-                    }`}
-                  >
+                    }`}>
                     <div>∿ Harmonic</div>
                     <div className="text-[9px] opacity-70 mt-0.5">R = 2.0</div>
                   </button>
@@ -476,61 +521,50 @@ export default function App() {
                   ω₂ = <span className="text-gray-300">{fmtFixed(omega2, 2)}</span> rad/s
                   {params.mode === 'irrational'
                     ? <span className="text-cyan-600 ml-2">• ω₂/ω₁ = {params.R} (irrational)</span>
-                    : <span className="text-purple-600 ml-2">• ω₂/ω₁ = 2.0 (rational)</span>
-                  }
+                    : <span className="text-purple-600 ml-2">• ω₂/ω₁ = 2.0 (rational)</span>}
                 </div>
               </div>
 
-              {/* G */}
               <div>
                 <label className="flex justify-between text-xs mb-1.5">
                   <span className="text-gray-400">Dissipation G</span>
                   <span className="text-orange-400 font-bold">{fmtFixed(params.G, 3)}</span>
                 </label>
-                <input
-                  type="range" min="0" max="0.5" step="0.001"
+                <input type="range" min="0" max="0.5" step="0.001"
                   value={params.G}
                   onChange={e => setParams(p => ({ ...p, G: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
+                  className="w-full" />
                 <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
                   <span>0 (lossless)</span><span>0.5 (heavy loss)</span>
                 </div>
               </div>
 
-              {/* A */}
               <div>
                 <label className="flex justify-between text-xs mb-1.5">
                   <span className="text-gray-400">Pump Amplitude A</span>
                   <span className="text-green-400 font-bold">{fmtFixed(params.amplitude, 2)}</span>
                 </label>
-                <input
-                  type="range" min="0.1" max="3.0" step="0.05"
+                <input type="range" min="0.1" max="3.0" step="0.05"
                   value={params.amplitude}
                   onChange={e => setParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))}
-                  className="w-full"
-                />
+                  className="w-full" />
               </div>
 
-              {/* System info */}
               <div className="bg-gray-900/50 rounded-lg p-3 text-[10px] text-gray-500 space-y-1.5 border border-gray-800/30">
                 <div className="text-gray-400 font-bold mb-1">System Parameters</div>
                 <div className="flex justify-between"><span>Nodes N</span><span className="text-gray-300">{params.N}</span></div>
                 <div className="flex justify-between"><span>Inductance L</span><span className="text-gray-300">{params.L} H</span></div>
                 <div className="flex justify-between"><span>Capacitance C</span><span className="text-gray-300">{params.C} F</span></div>
                 <div className="flex justify-between"><span>Wave speed c = 1/√(LC)</span><span className="text-gray-300">{fmtFixed(1 / Math.sqrt(params.L * params.C), 3)}</span></div>
-                <div className="flex justify-between"><span>Integration</span><span className="text-gray-300">RK4, dt={SIM_DT}</span></div>
+                <div className="flex justify-between"><span>Sim time</span><span className="text-gray-300">{fmtFixed(state.time, 3)} s</span></div>
               </div>
             </div>
           </section>
 
           {/* Analytics Dashboard */}
           <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">
-              📊 Analytics Dashboard
-            </h2>
+            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">📊 Analytics Dashboard</h2>
 
-            {/* K_gain */}
             <div className="mb-4">
               <div className="text-[10px] text-gray-500 mb-1">
                 Gain Coefficient K<sub>gain</sub> = E<sub>center</sub> / E<sub>edge</sub>
@@ -540,9 +574,7 @@ export default function App() {
                   localizationActive
                     ? 'text-transparent bg-clip-text bg-gradient-to-r from-red-400 to-yellow-400'
                     : 'text-gray-500'
-                }`}>
-                  {fmtFixed(gainCoeff, 2)}
-                </span>
+                }`}>{fmtFixed(gainCoeff, 2)}</span>
                 <span className="text-xs text-gray-600 pb-2">×</span>
               </div>
 
@@ -559,7 +591,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Metrics grid */}
             <div className="grid grid-cols-2 gap-2 mb-4">
               <div className="bg-gray-900/50 rounded-lg p-2.5 border border-gray-800/30">
                 <div className="text-[9px] text-gray-500">Center Energy (i=9,10)</div>
@@ -579,7 +610,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* History chart */}
             <div>
               <div className="text-[9px] text-gray-500 mb-1">Max Energy vs Time</div>
               <div className="bg-gray-900/50 rounded-lg p-2 h-28 relative overflow-hidden border border-gray-800/30">
@@ -602,7 +632,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Distribution */}
             <div className="mt-3">
               <div className="text-[9px] text-gray-500 mb-1">Energy Distribution</div>
               <div className="flex items-end gap-px h-14 bg-gray-900/50 rounded-lg p-1.5 border border-gray-800/30">
@@ -611,15 +640,12 @@ export default function App() {
                   const h = (energy / Math.max(maxEnergy, 1e-10)) * 100;
                   const isCenter = i === 9 || i === 10;
                   return (
-                    <div
-                      key={i}
-                      className="flex-1 rounded-t-sm transition-all duration-100"
+                    <div key={i} className="flex-1 rounded-t-sm transition-all duration-100"
                       style={{
                         height: `${Math.max(h, 3)}%`,
                         backgroundColor: isCenter ? '#fbbf24' : energyToColor(energy, maxEnergy),
                         boxShadow: isCenter && h > 50 ? '0 0 6px #fbbf24' : 'none',
-                      }}
-                    />
+                      }} />
                   );
                 })}
               </div>
@@ -629,9 +655,7 @@ export default function App() {
 
         {/* ── Physics Model ── */}
         <section className="bg-[#0a0a1a] rounded-xl border border-gray-800/50 p-4">
-          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">
-            📐 Physics Model
-          </h2>
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">📐 Physics Model</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-gray-400">
             <div className="bg-gray-900/30 rounded-lg p-3 border border-gray-800/30">
               <div className="text-cyan-400 font-bold mb-1.5 text-[11px]">Discrete Telegraph Equation</div>
@@ -666,7 +690,7 @@ export default function App() {
 
       <footer className="border-t border-gray-800/30 px-6 py-3 mt-4">
         <div className="max-w-7xl mx-auto text-[10px] text-gray-700 text-center">
-          LC-Chain EM Simulator • RK4 + NaN-guard • {params.N}-node discrete line • Real-time
+          LC-Chain EM Simulator • RK4 + NaN-guard • Real-time oscilloscopes • Spectral analysis • Waterfall plot
         </div>
       </footer>
     </div>
