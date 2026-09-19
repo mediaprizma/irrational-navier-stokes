@@ -11,12 +11,15 @@ export interface SimulationParams {
   R: number;
   amplitude: number;
   mode: 'irrational' | 'harmonic';
-  reflectiveBoundaries?: boolean;  // Если true — границы отражают волны
-  // Independent frequency control for each source
-  leftFreq1Enabled?: boolean;   // Enable f₁ on left source
-  leftFreq2Enabled?: boolean;   // Enable f₂ on left source
-  rightFreq1Enabled?: boolean;  // Enable f₁ on right source
-  rightFreq2Enabled?: boolean;  // Enable f₂ on right source
+  reflectiveBoundaries?: boolean;
+  leftFreq1Enabled?: boolean;
+  leftFreq2Enabled?: boolean;
+  rightFreq1Enabled?: boolean;
+  rightFreq2Enabled?: boolean;
+  // Multi-dimensional collapse parameters
+  geometry?: 'linear' | 'cylindrical' | 'spherical';  // Wave convergence geometry
+  nonlinearViscosity?: boolean;  // G drops sharply at peak voltages
+  criticalEnergy?: number;  // Threshold for "matter destruction"
 }
 
 export interface SimulationState {
@@ -44,6 +47,10 @@ export const DEFAULT_PARAMS: SimulationParams = {
   leftFreq2Enabled: true,
   rightFreq1Enabled: true,
   rightFreq2Enabled: true,
+  // Multi-dimensional collapse parameters
+  geometry: 'spherical',
+  nonlinearViscosity: true,
+  criticalEnergy: 100.0,
 };
 
 // Frequency display scale: ω_sim = 30 rad/s corresponds to f = 1 GHz
@@ -109,17 +116,56 @@ function computeDerivatives(
   p: SimulationParams,
 ): { dV: Float64Array; dI: Float64Array } {
   const { N, L, C, G } = p;
+  const geometry = p.geometry || 'linear';
+  const nonlinearViscosity = p.nonlinearViscosity || false;
   const dV = new Float64Array(N);
   const dI = new Float64Array(N - 1);
 
   const invC = 1.0 / C;
   const invL = 1.0 / L;
 
+  // Geometry factor: wave convergence amplification
+  // For spherical: energy density grows as 1/r² near center
+  // For cylindrical: energy density grows as 1/r near center
+  const getGeometryFactor = (i: number): number => {
+    const centerIdx = Math.floor(N / 2);
+    const distFromCenter = Math.abs(i - centerIdx);
+    const minDist = 1.0; // Prevent division by zero
+    
+    if (geometry === 'spherical') {
+      // Spherical convergence: 1/r² amplification
+      const r = Math.max(distFromCenter, minDist);
+      return (N / 2) / (r * r); // Amplification factor
+    } else if (geometry === 'cylindrical') {
+      // Cylindrical convergence: 1/r amplification
+      const r = Math.max(distFromCenter, minDist);
+      return Math.sqrt((N / 2) / r); // Amplification factor
+    }
+    return 1.0; // Linear: no amplification
+  };
+
+  // Nonlinear viscosity: G drops sharply at high voltages
+  const getNonlinearG = (v: number): number => {
+    if (!nonlinearViscosity) return G;
+    // G(V) = G_base / (1 + alpha * V²)
+    // When V is large, G drops → less dissipation → energy accumulates
+    const alpha = 10.0; // Nonlinearity strength
+    return G / (1.0 + alpha * v * v);
+  };
+
   // KCL at internal nodes
   for (let i = 1; i < N - 1; i++) {
     const iLeft = I[i - 1];   // current flowing INTO node i from left
     const iRight = I[i];      // current flowing OUT of node i to right
-    dV[i] = (iLeft - iRight - G * V[i]) * invC;
+    
+    // Apply geometry amplification to incoming currents
+    const geoFactor = getGeometryFactor(i);
+    const effectiveCurrent = (iLeft - iRight) * geoFactor;
+    
+    // Apply nonlinear viscosity
+    const effectiveG = getNonlinearG(V[i]);
+    
+    dV[i] = (effectiveCurrent - effectiveG * V[i]) * invC;
   }
 
   // KVL across each inductor
@@ -345,4 +391,31 @@ export function safeSum(arr: Float64Array): number {
     if (Number.isFinite(v)) s += v;
   }
   return s;
+}
+
+// Check if critical energy threshold (matter destruction) is reached
+export function checkMatterDestruction(
+  energies: Float64Array,
+  criticalEnergy: number,
+): { reached: boolean; maxEnergy: number; centerEnergy: number } {
+  const N = energies.length;
+  const cIdx1 = Math.floor(N / 2) - 1;
+  const cIdx2 = Math.floor(N / 2);
+  
+  const centerEnergy = Math.max(
+    Number.isFinite(energies[cIdx1]) ? energies[cIdx1] : 0,
+    Number.isFinite(energies[cIdx2]) ? energies[cIdx2] : 0
+  );
+  
+  let maxEnergy = 0;
+  for (let i = 0; i < N; i++) {
+    const e = Number.isFinite(energies[i]) ? energies[i] : 0;
+    if (e > maxEnergy) maxEnergy = e;
+  }
+  
+  return {
+    reached: maxEnergy >= criticalEnergy,
+    maxEnergy,
+    centerEnergy,
+  };
 }

@@ -8,6 +8,7 @@ import {
   computeGainCoefficient,
   safeMax,
   omegaToGHz,
+  checkMatterDestruction,
 } from './simulation';
 import CollisionView from './CollisionView';
 import PeakComparison from './PeakComparison';
@@ -73,6 +74,10 @@ export default function App() {
   const [harmPeakHistory, setHarmPeakHistory] = useState<{ t: number; peak: number }[]>([]);
   const [irrMaxPeak, setIrrMaxPeak] = useState(0);
   const [harmMaxPeak, setHarmMaxPeak] = useState(0);
+  
+  // Matter destruction tracking
+  const [irrDestructionReached, setIrrDestructionReached] = useState(false);
+  const [harmDestructionReached, setHarmDestructionReached] = useState(false);
 
   const irrStateRef = useRef(irrState);
   const harmStateRef = useRef(harmState);
@@ -148,11 +153,21 @@ export default function App() {
 
         setIrrMaxPeak(prev => Math.max(prev, irrPeak));
         setHarmMaxPeak(prev => Math.max(prev, harmPeak));
+        
+        // Check matter destruction threshold
+        const irrDestruction = checkMatterDestruction(irrCurrent.energies, irrParamsRef.current.criticalEnergy || 100.0);
+        const harmDestruction = checkMatterDestruction(harmCurrent.energies, harmParamsRef.current.criticalEnergy || 100.0);
+        if (irrDestruction.reached && !irrDestructionReached) {
+          setIrrDestructionReached(true);
+        }
+        if (harmDestruction.reached && !harmDestructionReached) {
+          setHarmDestructionReached(true);
+        }
       }
     }
 
     animFrameRef.current = requestAnimationFrame(simulationLoop);
-  }, []);
+  }, [irrDestructionReached, harmDestructionReached]);
 
   useEffect(() => {
     if (isRunning) {
@@ -183,6 +198,8 @@ export default function App() {
     setHarmPeakHistory([]);
     setIrrMaxPeak(0);
     setHarmMaxPeak(0);
+    setIrrDestructionReached(false);
+    setHarmDestructionReached(false);
     frameTickRef.current = 0;
     irrStateRef.current = irrNew;
     harmStateRef.current = harmNew;
@@ -289,6 +306,76 @@ export default function App() {
               </div>
             </div>
 
+            {/* Geometry & Nonlinear controls for Irrational */}
+            <div className="grid grid-cols-3 gap-2 mb-2">
+              <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
+                <div className="text-[9px] text-cyan-400 font-bold mb-1">GEOMETRY</div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setIrrParams(p => ({ ...p, geometry: 'linear' }))}
+                    className={`flex-1 px-1 py-1 rounded text-[8px] font-bold transition-all border ${
+                      irrParams.geometry === 'linear'
+                        ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    LINEAR
+                  </button>
+                  <button
+                    onClick={() => setIrrParams(p => ({ ...p, geometry: 'cylindrical' }))}
+                    className={`flex-1 px-1 py-1 rounded text-[8px] font-bold transition-all border ${
+                      irrParams.geometry === 'cylindrical'
+                        ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    CYL
+                  </button>
+                  <button
+                    onClick={() => setIrrParams(p => ({ ...p, geometry: 'spherical' }))}
+                    className={`flex-1 px-1 py-1 rounded text-[8px] font-bold transition-all border ${
+                      irrParams.geometry === 'spherical'
+                        ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    SPH
+                  </button>
+                </div>
+              </div>
+              <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
+                <div className="text-[9px] text-cyan-400 font-bold mb-1">NONLINEAR η</div>
+                <button
+                  onClick={() => setIrrParams(p => ({ ...p, nonlinearViscosity: !p.nonlinearViscosity }))}
+                  className={`w-full px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                    irrParams.nonlinearViscosity
+                      ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                      : 'bg-gray-900 text-gray-600 border-gray-700'
+                  }`}
+                >
+                  {irrParams.nonlinearViscosity ? 'ON' : 'OFF'}
+                </button>
+              </div>
+              <div className="bg-gray-900/50 rounded p-2 border border-cyan-900/30">
+                <div className="text-[9px] text-cyan-400 font-bold mb-1">CRITICAL E</div>
+                <input
+                  type="number"
+                  value={irrParams.criticalEnergy || 100}
+                  onChange={(e) => setIrrParams(p => ({ ...p, criticalEnergy: parseFloat(e.target.value) || 100 }))}
+                  className="w-full px-1 py-1 rounded text-[9px] bg-gray-900 text-cyan-300 border border-gray-700"
+                  step="10"
+                  min="1"
+                />
+              </div>
+            </div>
+
+            {/* Matter destruction indicator for Irrational */}
+            {irrDestructionReached && (
+              <div className="mb-2 px-3 py-2 rounded-lg bg-red-900/50 border-2 border-red-500 text-red-300 text-[10px] font-bold animate-pulse">
+                💥 MATTER DESTRUCTION THRESHOLD REACHED — Energy exceeded critical limit!
+              </div>
+            )}
+
             <CollisionView vRight={irrState.vRight} vLeft={irrState.vLeft} N={irrParams.N} time={irrState.time} />
           </section>
 
@@ -358,6 +445,76 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* Geometry & Nonlinear controls for Harmonic */}
+            <div className="grid grid-cols-3 gap-2 mb-2">
+              <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30">
+                <div className="text-[9px] text-purple-400 font-bold mb-1">GEOMETRY</div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setHarmParams(p => ({ ...p, geometry: 'linear' }))}
+                    className={`flex-1 px-1 py-1 rounded text-[8px] font-bold transition-all border ${
+                      harmParams.geometry === 'linear'
+                        ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    LINEAR
+                  </button>
+                  <button
+                    onClick={() => setHarmParams(p => ({ ...p, geometry: 'cylindrical' }))}
+                    className={`flex-1 px-1 py-1 rounded text-[8px] font-bold transition-all border ${
+                      harmParams.geometry === 'cylindrical'
+                        ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    CYL
+                  </button>
+                  <button
+                    onClick={() => setHarmParams(p => ({ ...p, geometry: 'spherical' }))}
+                    className={`flex-1 px-1 py-1 rounded text-[8px] font-bold transition-all border ${
+                      harmParams.geometry === 'spherical'
+                        ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                        : 'bg-gray-900 text-gray-600 border-gray-700'
+                    }`}
+                  >
+                    SPH
+                  </button>
+                </div>
+              </div>
+              <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30">
+                <div className="text-[9px] text-purple-400 font-bold mb-1">NONLINEAR η</div>
+                <button
+                  onClick={() => setHarmParams(p => ({ ...p, nonlinearViscosity: !p.nonlinearViscosity }))}
+                  className={`w-full px-1 py-1 rounded text-[9px] font-bold transition-all border ${
+                    harmParams.nonlinearViscosity
+                      ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                      : 'bg-gray-900 text-gray-600 border-gray-700'
+                  }`}
+                >
+                  {harmParams.nonlinearViscosity ? 'ON' : 'OFF'}
+                </button>
+              </div>
+              <div className="bg-gray-900/50 rounded p-2 border border-purple-900/30">
+                <div className="text-[9px] text-purple-400 font-bold mb-1">CRITICAL E</div>
+                <input
+                  type="number"
+                  value={harmParams.criticalEnergy || 100}
+                  onChange={(e) => setHarmParams(p => ({ ...p, criticalEnergy: parseFloat(e.target.value) || 100 }))}
+                  className="w-full px-1 py-1 rounded text-[9px] bg-gray-900 text-purple-300 border border-gray-700"
+                  step="10"
+                  min="1"
+                />
+              </div>
+            </div>
+
+            {/* Matter destruction indicator for Harmonic */}
+            {harmDestructionReached && (
+              <div className="mb-2 px-3 py-2 rounded-lg bg-red-900/50 border-2 border-red-500 text-red-300 text-[10px] font-bold animate-pulse">
+                💥 MATTER DESTRUCTION THRESHOLD REACHED — Energy exceeded critical limit!
+              </div>
+            )}
 
             <CollisionView vRight={harmState.vRight} vLeft={harmState.vLeft} N={harmParams.N} time={harmState.time} />
           </section>
