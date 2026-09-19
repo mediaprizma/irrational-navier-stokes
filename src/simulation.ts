@@ -22,13 +22,13 @@ export interface SimulationState {
 }
 
 export const DEFAULT_PARAMS: SimulationParams = {
-  N: 80,
+  N: 160,
   L: 0.01,
   C: 0.01,
-  G: 0.0001,
-  omega1: 30.0,
+  G: 0.0,
+  omega1: 31.0,
   R: 1.475482818459,
-  amplitude: 1.0,
+  amplitude: 5.0,
   mode: 'irrational',
 };
 

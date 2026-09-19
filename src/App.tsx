@@ -20,16 +20,26 @@ const SUB_STEPS = 5;
 export default function App() {
   // Irrational: R = 1.475482818459
   const [irrParams, setIrrParams] = useState<SimulationParams>({
-    ...DEFAULT_PARAMS,
-    mode: 'irrational',
+    N: 160,
+    L: 0.01,
+    C: 0.01,
+    G: 0.0,
+    omega1: 31.0,
     R: 1.475482818459,
+    amplitude: 5.0,
+    mode: 'irrational',
   });
   
   // Harmonic: R = 2.0
   const [harmParams, setHarmParams] = useState<SimulationParams>({
-    ...DEFAULT_PARAMS,
-    mode: 'harmonic',
+    N: 160,
+    L: 0.01,
+    C: 0.01,
+    G: 0.0,
+    omega1: 31.0,
     R: 2.0,
+    amplitude: 5.0,
+    mode: 'harmonic',
   });
 
   const [isRunning, setIsRunning] = useState(false);
@@ -120,8 +130,12 @@ export default function App() {
 
   const handleReset = () => {
     setIsRunning(false);
-    const irrNew = createInitialState(irrParams);
-    const harmNew = createInitialState(harmParams);
+    const resetIrr = { ...irrParams, N: 160, G: 0.0, omega1: 31.0, amplitude: 5.0 };
+    const resetHarm = { ...harmParams, N: 160, G: 0.0, omega1: 31.0, amplitude: 5.0 };
+    setIrrParams(resetIrr);
+    setHarmParams(resetHarm);
+    const irrNew = createInitialState(resetIrr);
+    const harmNew = createInitialState(resetHarm);
     setIrrState(irrNew);
     setHarmState(harmNew);
     setIrrPeakHistory([]);
@@ -170,7 +184,7 @@ export default function App() {
             <div className="text-[10px] text-cyan-400 font-bold mb-2">IRRATIONAL — Base Frequency f₁</div>
             <div className="flex items-center gap-2">
               <input
-                type="range" min="10" max="100" step="1"
+                type="range" min="10" max="100" step="0.5"
                 value={irrParams.omega1}
                 onChange={(e) => setIrrParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
                 className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
@@ -179,6 +193,34 @@ export default function App() {
             </div>
             <div className="text-[9px] text-gray-500 mt-1">
               f₁ = {fmtFixed(omegaToGHz(irrParams.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(irrOmega2), 2)} GHz | R = {irrParams.R.toFixed(4)}
+            </div>
+            <div className="text-[9px] text-cyan-600 mt-1">
+              Resonance: ω₁=31 (k=4), ω₁=47 (k=6) | N={irrParams.N} nodes
+            </div>
+            
+            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">NODES (N)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="40" max="320" step="40"
+                value={irrParams.N}
+                onChange={(e) => setIrrParams(p => ({ ...p, N: parseInt(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-cyan-300 font-mono w-16">N = {irrParams.N}</span>
+            </div>
+            
+            <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">DISSIPATION (G)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="0" max="0.01" step="0.0001"
+                value={irrParams.G}
+                onChange={(e) => setIrrParams(p => ({ ...p, G: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-cyan-300 font-mono w-16">G = {fmtFixed(irrParams.G, 4)}</span>
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1">
+              Set G=0 for maximum energy accumulation
             </div>
             
             <div className="text-[10px] text-cyan-400 font-bold mb-1 mt-3">AMPLITUDE (Power)</div>
@@ -200,7 +242,7 @@ export default function App() {
             <div className="text-[10px] text-purple-400 font-bold mb-2">HARMONIC — Base Frequency f₁</div>
             <div className="flex items-center gap-2">
               <input
-                type="range" min="10" max="100" step="1"
+                type="range" min="10" max="100" step="0.5"
                 value={harmParams.omega1}
                 onChange={(e) => setHarmParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))}
                 className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
@@ -209,6 +251,34 @@ export default function App() {
             </div>
             <div className="text-[9px] text-gray-500 mt-1">
               f₁ = {fmtFixed(omegaToGHz(harmParams.omega1), 2)} GHz | f₂ = {fmtFixed(omegaToGHz(harmOmega2), 2)} GHz | R = 2.0
+            </div>
+            <div className="text-[9px] text-purple-600 mt-1">
+              Resonance: ω₁=31 (k=4), ω₁=47 (k=6) | N={harmParams.N} nodes
+            </div>
+            
+            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">NODES (N)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="40" max="320" step="40"
+                value={harmParams.N}
+                onChange={(e) => setHarmParams(p => ({ ...p, N: parseInt(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-purple-300 font-mono w-16">N = {harmParams.N}</span>
+            </div>
+            
+            <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">DISSIPATION (G)</div>
+            <div className="flex items-center gap-2">
+              <input
+                type="range" min="0" max="0.01" step="0.0001"
+                value={harmParams.G}
+                onChange={(e) => setHarmParams(p => ({ ...p, G: parseFloat(e.target.value) }))}
+                className="flex-1 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+              />
+              <span className="text-[10px] text-purple-300 font-mono w-16">G = {fmtFixed(harmParams.G, 4)}</span>
+            </div>
+            <div className="text-[9px] text-gray-500 mt-1">
+              Set G=0 for maximum energy accumulation
             </div>
             
             <div className="text-[10px] text-purple-400 font-bold mb-1 mt-3">AMPLITUDE (Power)</div>
