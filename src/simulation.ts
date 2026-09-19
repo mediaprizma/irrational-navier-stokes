@@ -12,6 +12,11 @@ export interface SimulationParams {
   amplitude: number;
   mode: 'irrational' | 'harmonic';
   reflectiveBoundaries?: boolean;  // Если true — границы отражают волны
+  // Independent frequency control for each source
+  leftFreq1Enabled?: boolean;   // Enable f₁ on left source
+  leftFreq2Enabled?: boolean;   // Enable f₂ on left source
+  rightFreq1Enabled?: boolean;  // Enable f₁ on right source
+  rightFreq2Enabled?: boolean;  // Enable f₂ on right source
 }
 
 export interface SimulationState {
@@ -34,6 +39,11 @@ export const DEFAULT_PARAMS: SimulationParams = {
   amplitude: 1.0,
   mode: 'irrational',
   reflectiveBoundaries: true,  // Отражающие границы для накопления энергии
+  // All frequencies enabled by default
+  leftFreq1Enabled: true,
+  leftFreq2Enabled: true,
+  rightFreq1Enabled: true,
+  rightFreq2Enabled: true,
 };
 
 // Frequency display scale: ω_sim = 30 rad/s corresponds to f = 1 GHz
@@ -68,14 +78,18 @@ function safeNum(v: number, fallback = 0): number {
 
 export function boundaryVoltageLeft(t: number, p: SimulationParams): number {
   const omega2 = p.mode === 'irrational' ? p.R * p.omega1 : 2.0 * p.omega1;
-  return (p.amplitude / 2.0) * (Math.sin(p.omega1 * t) + Math.sin(omega2 * t));
+  const f1 = p.leftFreq1Enabled !== false ? Math.sin(p.omega1 * t) : 0;
+  const f2 = p.leftFreq2Enabled !== false ? Math.sin(omega2 * t) : 0;
+  return (p.amplitude / 2.0) * (f1 + f2);
 }
 
 export function boundaryVoltageRight(t: number, p: SimulationParams): number {
   const omega2 = p.mode === 'irrational' ? p.R * p.omega1 : 2.0 * p.omega1;
   // In-phase with left source: both start at peak simultaneously
   // so waves meet head-on and constructively interfere at center
-  return (p.amplitude / 2.0) * (Math.sin(p.omega1 * t) + Math.sin(omega2 * t));
+  const f1 = p.rightFreq1Enabled !== false ? Math.sin(p.omega1 * t) : 0;
+  const f2 = p.rightFreq2Enabled !== false ? Math.sin(omega2 * t) : 0;
+  return (p.amplitude / 2.0) * (f1 + f2);
 }
 
 // ─── ODE right-hand side ─────────────────────────────────────────────────────

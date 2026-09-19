@@ -148,8 +148,17 @@ export default function App() {
 
   const handleReset = () => {
     setIsRunning(false);
-    const irrNew = createInitialState({ ...params, mode: 'irrational' });
-    const harmNew = createInitialState({ ...params, mode: 'harmonic' });
+    // Reset with all frequencies enabled
+    const resetParams = {
+      ...params,
+      leftFreq1Enabled: true,
+      leftFreq2Enabled: true,
+      rightFreq1Enabled: true,
+      rightFreq2Enabled: true,
+    };
+    setParams(resetParams);
+    const irrNew = createInitialState({ ...resetParams, mode: 'irrational' });
+    const harmNew = createInitialState({ ...resetParams, mode: 'harmonic' });
     setIrrState(irrNew);
     setHarmState(harmNew);
     setIrrGain(1.0);
@@ -228,6 +237,60 @@ export default function App() {
             <div className="text-[9px] text-gray-600 mt-1">
               λ₁ = {fmtFixed(2 * Math.PI / params.omega1 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes |
               λ₂ = {fmtFixed(2 * Math.PI / omega2 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes
+            </div>
+          </div>
+        </div>
+
+        {/* ── Frequency Control ── */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-[#0a0a1a] rounded-lg border border-cyan-900/30 p-3">
+            <h3 className="text-[10px] font-bold text-cyan-400 mb-2">⚡ LEFT SOURCE (i=0)</h3>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setParams(p => ({ ...p, leftFreq1Enabled: !p.leftFreq1Enabled }))}
+                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-bold transition-all border ${
+                  params.leftFreq1Enabled !== false
+                    ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                    : 'bg-gray-900 text-gray-600 border-gray-700'
+                }`}
+              >
+                f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz
+              </button>
+              <button
+                onClick={() => setParams(p => ({ ...p, leftFreq2Enabled: !p.leftFreq2Enabled }))}
+                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-bold transition-all border ${
+                  params.leftFreq2Enabled !== false
+                    ? 'bg-cyan-900/50 text-cyan-300 border-cyan-600'
+                    : 'bg-gray-900 text-gray-600 border-gray-700'
+                }`}
+              >
+                f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz
+              </button>
+            </div>
+          </div>
+          <div className="bg-[#0a0a1a] rounded-lg border border-purple-900/30 p-3">
+            <h3 className="text-[10px] font-bold text-purple-400 mb-2">∿ RIGHT SOURCE (i={params.N - 1})</h3>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setParams(p => ({ ...p, rightFreq1Enabled: !p.rightFreq1Enabled }))}
+                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-bold transition-all border ${
+                  params.rightFreq1Enabled !== false
+                    ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                    : 'bg-gray-900 text-gray-600 border-gray-700'
+                }`}
+              >
+                f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz
+              </button>
+              <button
+                onClick={() => setParams(p => ({ ...p, rightFreq2Enabled: !p.rightFreq2Enabled }))}
+                className={`flex-1 px-2 py-1.5 rounded text-[10px] font-bold transition-all border ${
+                  params.rightFreq2Enabled !== false
+                    ? 'bg-purple-900/50 text-purple-300 border-purple-600'
+                    : 'bg-gray-900 text-gray-600 border-gray-700'
+                }`}
+              >
+                f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz
+              </button>
             </div>
           </div>
         </div>
