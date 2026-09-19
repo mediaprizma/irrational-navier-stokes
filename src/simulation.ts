@@ -33,6 +33,17 @@ export const DEFAULT_PARAMS: SimulationParams = {
   amplitude: 1.0,
   mode: 'irrational',
 };
+
+// Frequency display scale: ω_sim = 30 rad/s corresponds to f = 1 GHz
+// So: f_GHz = ω_sim / (2π × 30) × 1 = ω_sim / 30 (in our units)
+// More precisely: we define 1 "simulation frequency unit" = 1/30 GHz
+export const FREQ_SCALE_GHZ_PER_UNIT = 1.0 / 30.0; // ω=30 → 1 GHz
+export function omegaToGHz(omega: number): number {
+  return omega * FREQ_SCALE_GHZ_PER_UNIT;
+}
+export function GHzToOmega(fGHz: number): number {
+  return fGHz / FREQ_SCALE_GHZ_PER_UNIT;
+}
 // With N=80, c=1/√(LC)=100:
 //   λ₁ = 2π·c/ω₁ ≈ 21 nodes → ~4 wavelengths fit in the line → visible nodes/antinodes
 //   λ₂ = 2π·c/ω₂ ≈ 14 nodes → ~6 wavelengths fit in the line

@@ -8,6 +8,8 @@ import {
   computeGainCoefficient,
   safeMax,
   safeSum,
+  omegaToGHz,
+  GHzToOmega,
 } from './simulation';
 import Oscilloscope from './Oscilloscope';
 import Waterfall from './Waterfall';
@@ -367,7 +369,8 @@ export default function App() {
             </div>
           </div>
           <p className="text-[10px] text-gray-500 mb-3">
-            Left source and right source both start at peak simultaneously → waves travel toward each other → collide at center → interference peaks (yellow dots)
+            Left source and right source both start at peak simultaneously → waves travel toward each other → collide at center → interference peaks (yellow dots) &nbsp;|&nbsp;
+            <span className="text-cyan-400">f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz</span>, <span className="text-purple-400">f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz</span>
           </p>
 
           {/* THE MAIN GRAPH */}
@@ -488,7 +491,7 @@ export default function App() {
             height={140}
           />
           <div className="mt-2 text-[9px] text-gray-600 text-center">
-            Two spectral peaks at f₁ = {fmtFixed(params.omega1 / (2 * Math.PI), 2)} Hz and f₂ = {fmtFixed(omega2 / (2 * Math.PI), 2)} Hz
+            Two spectral peaks at f₁ = {fmtFixed(omegaToGHz(params.omega1), 2)} GHz and f₂ = {fmtFixed(omegaToGHz(omega2), 2)} GHz
             {params.mode === 'irrational' && ' • Irrational ratio → quasi-periodic beating → energy accumulates at center'}
           </div>
         </section>
@@ -564,11 +567,14 @@ export default function App() {
             <div className="space-y-4">
               <div>
                 <label className="flex justify-between text-xs mb-1.5">
-                  <span className="text-gray-400">Base Frequency ω₁</span>
-                  <span className="text-cyan-400 font-bold">{fmtFixed(params.omega1, 1)} rad/s</span>
+                  <span className="text-gray-400">Base Frequency f₁</span>
+                  <span className="text-cyan-400 font-bold">{fmtFixed(omegaToGHz(params.omega1), 2)} GHz</span>
                 </label>
                 <input type="range" min="5" max="100" step="0.5" value={params.omega1}
                   onChange={e => setParams(p => ({ ...p, omega1: parseFloat(e.target.value) }))} className="w-full" />
+                <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
+                  <span>0.17 GHz</span><span>3.33 GHz</span>
+                </div>
               </div>
               <div>
                 <label className="text-xs text-gray-400 mb-2 block">Pumping Mode</label>
@@ -587,10 +593,10 @@ export default function App() {
                   </button>
                 </div>
                 <div className="text-[9px] text-gray-600 mt-2 bg-gray-900/50 rounded px-2 py-1">
-                  ω₂ = <span className="text-gray-300">{fmtFixed(omega2, 2)}</span> rad/s
+                  f₂ = <span className="text-gray-300">{fmtFixed(omegaToGHz(omega2), 2)}</span> GHz
                   {params.mode === 'irrational'
-                    ? <span className="text-cyan-600 ml-2">• ω₂/ω₁ = {params.R} (irrational)</span>
-                    : <span className="text-purple-600 ml-2">• ω₂/ω₁ = 2.0 (rational)</span>}
+                    ? <span className="text-cyan-600 ml-2">• f₂/f₁ = {params.R} (irrational)</span>
+                    : <span className="text-purple-600 ml-2">• f₂/f₁ = 2.0 (rational)</span>}
                 </div>
               </div>
               <div>
@@ -610,12 +616,13 @@ export default function App() {
                   onChange={e => setParams(p => ({ ...p, amplitude: parseFloat(e.target.value) }))} className="w-full" />
               </div>
               <div className="bg-gray-900/50 rounded-lg p-3 text-[10px] text-gray-500 space-y-1.5 border border-gray-800/30">
-                <div className="text-gray-400 font-bold mb-1">System</div>
-                <div className="flex justify-between"><span>N</span><span className="text-gray-300">{params.N}</span></div>
-                <div className="flex justify-between"><span>L</span><span className="text-gray-300">{params.L} H</span></div>
-                <div className="flex justify-between"><span>C</span><span className="text-gray-300">{params.C} F</span></div>
+                <div className="text-gray-400 font-bold mb-1">System Parameters</div>
+                <div className="flex justify-between"><span>Nodes N</span><span className="text-gray-300">{params.N}</span></div>
+                <div className="flex justify-between"><span>f₁</span><span className="text-cyan-300">{fmtFixed(omegaToGHz(params.omega1), 2)} GHz</span></div>
+                <div className="flex justify-between"><span>f₂</span><span className="text-purple-300">{fmtFixed(omegaToGHz(omega2), 2)} GHz</span></div>
                 <div className="flex justify-between"><span>Z = √(L/C)</span><span className="text-gray-300">{fmtFixed(Math.sqrt(params.L / params.C), 3)} Ω</span></div>
-                <div className="flex justify-between"><span>c = 1/√(LC)</span><span className="text-gray-300">{fmtFixed(1 / Math.sqrt(params.L * params.C), 1)}</span></div>
+                <div className="flex justify-between"><span>λ₁ (wavelength)</span><span className="text-gray-300">{fmtFixed(2 * Math.PI / params.omega1 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes</span></div>
+                <div className="flex justify-between"><span>λ₂ (wavelength)</span><span className="text-gray-300">{fmtFixed(2 * Math.PI / omega2 * (1 / Math.sqrt(params.L * params.C)), 1)} nodes</span></div>
                 <div className="flex justify-between"><span>Sim time</span><span className="text-gray-300">{fmtFixed(state.time, 3)} s</span></div>
               </div>
             </div>
